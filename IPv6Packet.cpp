@@ -11,6 +11,10 @@
 #include <sys/ioctl.h>
 #include <unistd.h>
 #include <cstdio> // for popen and pclose
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <net/if_dl.h>
+#include <net/if_types.h>  // 添加这行来包含 IFT_ETHER 的定义
 
 // 构造函数：初始化IPv6Packet对象
 IPv6Packet::IPv6Packet(const std::string& destMAC, const std::string& destIPv6, const std::vector<uint8_t>& payload, const std::vector<uint8_t>& extensionHeaderContent, bool fragmentFlag)
@@ -39,57 +43,82 @@ const std::vector<uint8_t>& IPv6Packet::getPacket() const {
 
 // 获取本地MAC地址
 void IPv6Packet::fetchLocalMAC() {
-    std::cout << "获取本地MAC地址使用ifconfig" << std::endl;
-    std::string command = "ifconfig eth0 | grep ether | awk '{print $2}'"; // 使用适当的接口名称
-    FILE* pipe = popen(command.c_str(), "r");
-    if (!pipe) {
-        throw std::runtime_error("无法运行ifconfig命令");
+    std::cout << "获取本地MAC地址" << std::endl;
+    
+    struct ifaddrs *ifap, *ifaptr;
+    unsigned char *ptr;
+
+    if (getifaddrs(&ifap) == 0) {
+        for (ifaptr = ifap; ifaptr != nullptr; ifaptr = ifaptr->ifa_next) {
+            if (ifaptr->ifa_addr->sa_family == AF_LINK) {
+                struct sockaddr_dl *sdl = (struct sockaddr_dl *)ifaptr->ifa_addr;
+                if (sdl->sdl_type == IFT_ETHER) {
+                    ptr = (unsigned char *)LLADDR(sdl);
+                    char mac[18];
+                    snprintf(mac, sizeof(mac), "%02x:%02x:%02x:%02x:%02x:%02x", 
+                             ptr[0], ptr[1], ptr[2], ptr[3], ptr[4], ptr[5]);
+                    srcMAC = mac;
+                    std::cout << "本地MAC地址: " << srcMAC << std::endl;
+                    freeifaddrs(ifap);
+                    return;
+                }
+            }
+        }
+        freeifaddrs(ifap);
     }
 
-    char buffer[128];
-    std::string mac_address = "";
-    while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
-        mac_address += buffer;
-    }
-    pclose(pipe);
-
-    // 移除可能存在的换行符
-    mac_address.erase(mac_address.find_last_not_of(" \n\r\t") + 1);
-    srcMAC = mac_address; // 设置本地MAC地址
-    std::cout << "本地MAC地址: " << srcMAC << std::endl;
+    throw std::runtime_error("无法获取MAC地址");
 }
 
 // 获取本地IPv6地址
 void IPv6Packet::fetchLocalIPv6() {
     std::cout << "获取本地IPv6地址" << std::endl;
     struct ifaddrs* ifaddr;
+    struct ifaddrs* ifa;
+    int family, s;
+    char host[NI_MAXHOST];
+
     if (getifaddrs(&ifaddr) == -1) {
         throw std::runtime_error("无法获取网络接口");
     }
 
-    for (struct ifaddrs* ifa = ifaddr; ifa != nullptr; ifa = ifa->ifa_next) {
-        if (ifa->ifa_addr == nullptr || ifa->ifa_addr->sa_family != AF_INET6) {
+    bool found = false;
+    for (ifa = ifaddr; ifa != nullptr; ifa = ifa->ifa_next) {
+        if (ifa->ifa_addr == nullptr)
             continue;
-        }
 
-        char addr[INET6_ADDRSTRLEN];
-        if (inet_ntop(AF_INET6, &((struct sockaddr_in6*)ifa->ifa_addr)->sin6_addr, addr, sizeof(addr))) {
-            // 忽略链路本地地址和回环地址
-            if (strncmp(addr, "fe80", 4) == 0 || strcmp(addr, "::1") == 0) {
+        family = ifa->ifa_addr->sa_family;
+
+        if (family == AF_INET6) {
+            s = getnameinfo(ifa->ifa_addr, sizeof(struct sockaddr_in6),
+                            host, NI_MAXHOST, nullptr, 0, NI_NUMERICHOST);
+            if (s != 0) {
+                std::cout << "getnameinfo() 失败: " << gai_strerror(s) << std::endl;
                 continue;
             }
-            srcIPv6 = addr; // 设置本地IPv6地址
+
+            // 忽略链路本地地址和回环地址
+            if (strncmp(host, "fe80", 4) == 0 || strcmp(host, "::1") == 0) {
+                continue;
+            }
+
+            srcIPv6 = host;
             std::cout << "本地IPv6地址: " << srcIPv6 << std::endl;
+            found = true;
             break;
         }
     }
 
     freeifaddrs(ifaddr);
+
+    if (!found) {
+        throw std::runtime_error("未找到有效的IPv6地址");
+    }
 }
 
 // 添加IPv6基本头部
 void IPv6Packet::addIPv6Header() {
-    std::cout << "添加IPv6头部，源地址: " << srcIPv6 << " 目的地址: " << destIPv6 << std::endl;
+    // std::cout << "添加IPv6头部，源地址: " << srcIPv6 << " \n目的地址: " << destIPv6 << std::endl;
 
     // 版本(4位) + 流量类别(8位) + 流标签(20位)
     uint32_t version_traffic_flow = (6 << 28); // 版本6
