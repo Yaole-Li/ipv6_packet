@@ -25,6 +25,18 @@ public:
     // 输出数据包的详细信息
     void printPacketDetails() const;
 
+    // 获取目标MAC地址
+    const std::string& getDestMAC() const { return destMAC; }
+
+    // 获取目标IPv6地址
+    const std::string& getDestIPv6() const { return destIPv6; }
+
+    // 获取扩展头部内容
+    const std::vector<uint8_t>& getExtensionHeaderContent() const { return extensionHeaderContent; }
+
+    // 获取负载数据
+    const std::vector<uint8_t>& getPayload() const { return payload; }
+
 private:
     std::string srcMAC; // 本地MAC地址
     std::string destMAC; // 目标MAC地址
