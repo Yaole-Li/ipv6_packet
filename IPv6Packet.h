@@ -7,8 +7,14 @@
 // IPv6Packet类用于构造和管理IPv6数据包
 class IPv6Packet {
 public:
-    // 构造函数：初始化IPv6Packet对象
-    IPv6Packet(const std::string& destMAC, const std::string& destIPv6, const std::vector<uint8_t>& payload, const std::vector<uint8_t>& extensionHeaderContent, bool fragmentFlag);
+    // 修改构造函数，添加分片相关参数
+    IPv6Packet(const std::string& destMAC, const std::string& destIPv6, 
+               const std::vector<uint8_t>& payload, 
+               const std::vector<uint8_t>& extensionHeaderContent, 
+               bool fragmentFlag,
+               uint16_t fragmentOffset = 0,
+               bool moreFragments = false,
+               uint32_t identification = 0);
 
     // 构造完整的IPv6数据包
     void constructPacket();
@@ -37,6 +43,12 @@ public:
     // 获取负载数据
     const std::vector<uint8_t>& getPayload() const { return payload; }
 
+    // 获取源MAC地址
+    const std::string& getSrcMAC() const { return srcMAC; }
+
+    // 获取源IPv6地址
+    const std::string& getSrcIPv6() const { return srcIPv6; }
+
 private:
     std::string srcMAC; // 本地MAC地址
     std::string destMAC; // 目标MAC地址
@@ -48,6 +60,9 @@ private:
     size_t packetLength; // 数据包长度
     uint8_t* packetHeaderAddress; // 数据包头部地址
     bool fragmentFlag; // 分片标志
+    uint16_t fragmentOffset; // 分片偏移
+    bool moreFragments; // 是否有更多分片
+    uint32_t identification; // 分片标识符
 
     // 添加IPv6基本头部
     void addIPv6Header();

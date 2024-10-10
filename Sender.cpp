@@ -14,6 +14,9 @@ Sender::Sender(int windowSize, size_t mtu, const std::string& interface)
     if (handle == nullptr) {
         throw std::runtime_error("无法打开网络接口: " + std::string(errbuf));
     }
+    
+    // 计算最大分片大小
+    maxFragmentSize = mtu - 40 - 8;  // IPv6 header (40 bytes) + Fragment header (8 bytes)
 }
 
 // 析构函数：清理资源
@@ -35,6 +38,7 @@ void Sender::addPacket(const std::string& destMAC, const std::string& destIPv6,
 
 // 尝试发送下一个数据包
 bool Sender::sendPacket() {
+    std::cout << "尝试发送数据包，当前序列号: " << nextSequenceNumber << std::endl;
     // 检查是否在滑动窗口内且队列非空
     if (nextSequenceNumber < base + windowSize && !packetQueue.empty()) {
         auto& packet = packetQueue.front();
@@ -52,11 +56,14 @@ bool Sender::sendPacket() {
             }
         }
         if (allSent) {
+            std::cout << "成功发送数据包，序列号: " << nextSequenceNumber << std::endl;
             // 更新流表，增加序列号，移除已发送的数据包
             updateFlowTable(nextSequenceNumber, true, false);
             nextSequenceNumber++;
             packetQueue.erase(packetQueue.begin());
             return true;
+        } else {
+            std::cout << "发送数据包失败，序列号: " << nextSequenceNumber << std::endl;
         }
     }
     return false;
@@ -64,6 +71,7 @@ bool Sender::sendPacket() {
 
 // 处理接收到的 ACK
 void Sender::handleAck(uint32_t ackNumber) {
+    std::cout << "收到 ACK，确认号: " << ackNumber << std::endl;
     if (ackNumber >= base) {
         // 更新已确认的数据包状态
         for (uint32_t i = base; i <= ackNumber; i++) {
@@ -79,12 +87,14 @@ void Sender::handleAck(uint32_t ackNumber) {
 
 // 检查超时的数据包
 void Sender::checkTimeouts() {
+    std::cout << "检查超时数据包" << std::endl;
     auto now = std::chrono::steady_clock::now();
     for (auto& entry : flowTable) {
         if (entry.second.sent && !entry.second.acknowledged) {
             // 计算经过的时间
             auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - entry.second.sentTime).count();
             if (elapsed > 5) { // 5秒超时
+                std::cout << "数据包超时，序列号: " << entry.first << std::endl;
                 retransmitPacket(entry.first);
             }
         }
@@ -132,6 +142,8 @@ std::vector<std::vector<uint8_t>> Sender::fragmentPacket(const IPv6Packet& packe
     // 计算可用于分片内容的最大大小
     size_t maxFragmentSize = maxIPv6PacketSize - ipv6HeaderSize - fragmentHeaderSize;
 
+    uint32_t identification = generateUniqueIdentification();
+
     if (payload.empty()) {
         // 没有负载，只有目的选项报头
         if (extensionHeader.size() > maxFragmentSize) {
@@ -141,14 +153,18 @@ std::vector<std::vector<uint8_t>> Sender::fragmentPacket(const IPv6Packet& packe
                 std::vector<uint8_t> fragment(extensionHeader.begin() + offset, extensionHeader.begin() + offset + fragmentSize);
                 
                 IPv6Packet fragmentPacket(packet.getDestMAC(), packet.getDestIPv6(), 
-                                          std::vector<uint8_t>(), fragment, true);
+                                          std::vector<uint8_t>(), fragment, true, 
+                                          offset / 8, 
+                                          offset + fragmentSize < extensionHeader.size(), 
+                                          identification);
                 fragmentPacket.constructPacket();
                 fragments.push_back(fragmentPacket.getPacket());
             }
         } else {
             // 目的选项报头不需要分片
             IPv6Packet fragmentPacket(packet.getDestMAC(), packet.getDestIPv6(), 
-                                      std::vector<uint8_t>(), extensionHeader, false);
+                                      std::vector<uint8_t>(), extensionHeader, false, 
+                                      0, false, identification);
             fragmentPacket.constructPacket();
             fragments.push_back(fragmentPacket.getPacket());
         }
@@ -166,14 +182,18 @@ std::vector<std::vector<uint8_t>> Sender::fragmentPacket(const IPv6Packet& packe
                 std::vector<uint8_t> fragment(combinedData.begin() + offset, combinedData.begin() + offset + fragmentSize);
                 
                 IPv6Packet fragmentPacket(packet.getDestMAC(), packet.getDestIPv6(), 
-                                          std::vector<uint8_t>(), fragment, true);
+                                          std::vector<uint8_t>(), fragment, true, 
+                                          offset / 8, 
+                                          offset + fragmentSize < totalSize, 
+                                          identification);
                 fragmentPacket.constructPacket();
                 fragments.push_back(fragmentPacket.getPacket());
             }
         } else {
             // 不需要分片
             IPv6Packet fragmentPacket(packet.getDestMAC(), packet.getDestIPv6(), 
-                                      payload, extensionHeader, false);
+                                      payload, extensionHeader, false, 
+                                      0, false, identification);
             fragmentPacket.constructPacket();
             fragments.push_back(fragmentPacket.getPacket());
         }
@@ -184,6 +204,8 @@ std::vector<std::vector<uint8_t>> Sender::fragmentPacket(const IPv6Packet& packe
 
 // 发送单个分片
 bool Sender::sendFragment(const std::vector<uint8_t>& fragmentPacket, uint32_t sequenceNumber, uint16_t fragmentOffset, bool moreFragments) {
+    (void)moreFragments;  // 避免未使用参数的警告
+    
     // 添加以太网帧头和尾
     std::vector<uint8_t> ethernetFrame = addEthernetFrame(fragmentPacket);
     
@@ -205,11 +227,13 @@ std::vector<uint8_t> Sender::addEthernetFrame(const std::vector<uint8_t>& ipv6Pa
     // 添加以太网帧头（14字节）
     struct ether_header header;
     // 解析目标 MAC 地址
-    sscanf(ipv6Packet[0].getDestMAC().c_str(), "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx", 
+    std::string destMAC = "00:11:22:33:44:55";  // 这里需要替换为实际的目标 MAC 地址
+    sscanf(destMAC.c_str(), "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx", 
            &header.ether_dhost[0], &header.ether_dhost[1], &header.ether_dhost[2],
            &header.ether_dhost[3], &header.ether_dhost[4], &header.ether_dhost[5]);
     // 解析源 MAC 地址
-    sscanf(ipv6Packet[0].getSrcMAC().c_str(), "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx", 
+    std::string srcMAC = "AA:BB:CC:DD:EE:FF";  // 这里需要替换为实际的源 MAC 地址
+    sscanf(srcMAC.c_str(), "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx", 
            &header.ether_shost[0], &header.ether_shost[1], &header.ether_shost[2],
            &header.ether_shost[3], &header.ether_shost[4], &header.ether_shost[5]);
     // 设置以太网类型为 IPv6
@@ -242,6 +266,11 @@ uint32_t Sender::calculateCRC(const std::vector<uint8_t>& data) {
         }
     }
     return ~crc;
+}
+
+uint32_t Sender::generateUniqueIdentification() {
+    static uint32_t counter = 0;
+    return ++counter;
 }
 
 /*

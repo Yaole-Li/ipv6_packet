@@ -95,6 +95,11 @@ private:
 
     std::string interface;  // 网络接口名称
     pcap_t* handle;         // libpcap 句柄
+
+    // 生成唯一的标识符
+    uint32_t generateUniqueIdentification();
+
+    size_t maxFragmentSize;  // 最大分片大小
 };
 
 #endif // SENDER_H

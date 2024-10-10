@@ -17,8 +17,14 @@
 #include <net/if_types.h>  // 添加这行来包含 IFT_ETHER 的定义
 
 // 构造函数：初始化IPv6Packet对象
-IPv6Packet::IPv6Packet(const std::string& destMAC, const std::string& destIPv6, const std::vector<uint8_t>& payload, const std::vector<uint8_t>& extensionHeaderContent, bool fragmentFlag)
-    : destMAC(destMAC), destIPv6(destIPv6), payload(payload), extensionHeaderContent(extensionHeaderContent), fragmentFlag(fragmentFlag), packetLength(0), packetHeaderAddress(nullptr) {
+IPv6Packet::IPv6Packet(const std::string& destMAC, const std::string& destIPv6, const std::vector<uint8_t>& payload, const std::vector<uint8_t>& extensionHeaderContent, bool fragmentFlag,
+                        uint16_t fragmentOffset,
+                        bool moreFragments,
+                        uint32_t identification)
+    : destMAC(destMAC), destIPv6(destIPv6), payload(payload), 
+      extensionHeaderContent(extensionHeaderContent), fragmentFlag(fragmentFlag),
+      fragmentOffset(fragmentOffset), moreFragments(moreFragments), 
+      identification(identification), packetLength(0), packetHeaderAddress(nullptr) {
     fetchLocalMAC();  // 获取本地MAC地址
     fetchLocalIPv6(); // 获取本地IPv6地址
 }
@@ -158,15 +164,17 @@ void IPv6Packet::addFragmentHeader() {
     packet.push_back(60); // 60表示目的选项头部
 
     // Reserved (8位)
-    packet.push_back(0x00); // 示例值，通常为0
+    packet.push_back(0x00); // 保留字段，设置为0
 
     // Fragment Offset (13位) + Res (2位) + M Flag (1位)
-    uint16_t fragmentOffsetAndFlags = 0; // 示例值，实际需要根据分片情况设置
+    uint16_t fragmentOffsetAndFlags = (fragmentOffset << 3);
+    if (moreFragments) {
+        fragmentOffsetAndFlags |= 1;
+    }
     packet.push_back((fragmentOffsetAndFlags >> 8) & 0xFF);
     packet.push_back(fragmentOffsetAndFlags & 0xFF);
 
     // Identification (32位)
-    uint32_t identification = 0; // 示例值，实际需要生成唯一标识符
     packet.push_back((identification >> 24) & 0xFF);
     packet.push_back((identification >> 16) & 0xFF);
     packet.push_back((identification >> 8) & 0xFF);
