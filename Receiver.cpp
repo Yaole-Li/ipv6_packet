@@ -29,7 +29,7 @@ Receiver::Receiver(int windowSize, size_t mtu, const std::string& interface, int
         queueCVs[i] = std::make_unique<std::condition_variable>();
     }
 
-    // 初始化 IPv6Packet 对象，用于获取本地 MAC 和 IP 地址
+    // 初始化 IPv6Packet 象，用于获取本地 MAC 和 IP 地址
     dummyPacket = std::make_unique<IPv6Packet>("", "", std::vector<uint8_t>(), std::vector<uint8_t>(), false);
 }
 
@@ -181,13 +181,18 @@ void Receiver::workerThread(int threadId) {
 // 处理单个数据包
 void Receiver::handlePacket(const std::vector<uint8_t>& packetData) {
     std::cout << "[Receiver.cpp] 处理数据包，大小: " << packetData.size() << " 字节" << std::endl;
-    if (!checkIPv6Header(packetData.data(), packetData.size())) {
-        std::cout << "IPv6 头部不完整，丢弃数据包" << std::endl;
+    
+    // 跳过以太网头部（通常是14字节）
+    const uint8_t* ipv6Packet = packetData.data() + 14;
+    int ipv6PacketSize = packetData.size() - 14 - 4;
+
+    if (!checkIPv6Header(ipv6Packet, ipv6PacketSize)) {
+        std::cout << "[Receiver.cpp] IPv6 头部不完整，丢弃数据包" << std::endl;
         return;
     }
 
     FlowKey flowKey = extractFlowKey(packetData);
-    bool hasPayload = checkPayload(packetData.data(), packetData.size());
+    bool hasPayload = checkPayload(ipv6Packet, ipv6PacketSize);
 
     std::cout << "[Receiver.cpp] 数据包" << (hasPayload ? "包含" : "不包含") << "有效载荷" << std::endl;
 
@@ -195,9 +200,9 @@ void Receiver::handlePacket(const std::vector<uint8_t>& packetData) {
     if (flows.find(flowKey) == flows.end()) {
         flows[flowKey] = std::make_shared<FlowState>();
         flows[flowKey]->expectedSequenceNumber = 0;
-        addFlowToQueue(flowKey);  // 使用新方法添加流
+        addFlowToQueue(flowKey);
     } else {
-        updateFlowActivity(flowKey);  // 使用新方法更新流活动
+        updateFlowActivity(flowKey);
     }
     auto flowState = flows[flowKey];
     lock.unlock();
@@ -205,16 +210,16 @@ void Receiver::handlePacket(const std::vector<uint8_t>& packetData) {
     // 处理数据包
     std::unique_lock<std::mutex> flowLock(flowState->flowMutex);
     uint32_t ackNumber = 0;
-    if (!hasPayload) { // 如果没有负载，则组扩展头
-        ackNumber = reassembleExtensionHeader(flowKey, packetData.data(), packetData.size());
-    } else { // 如果有负载，则重组负载
-        ackNumber = reassemblePayload(flowKey, packetData.data(), packetData.size());
+    if (!hasPayload) {
+        ackNumber = reassembleExtensionHeader(flowKey, ipv6Packet, ipv6PacketSize);
+    } else {
+        ackNumber = reassemblePayload(flowKey, ipv6Packet, ipv6PacketSize);
     }
     flowLock.unlock();
 
     // 发送 ACK
     if (ackNumber != 0) {
-        std::cout << "准备发送 ACK，确认号: " << ackNumber << std::endl;
+        std::cout << "[Receiver.cpp] 准备发送 ACK，确认号: " << ackNumber << std::endl;
         sendAck(flowKey, ackNumber);
     }
 }
@@ -267,23 +272,47 @@ bool Receiver::checkPayload(const uint8_t* packet, int packetSize) {
     uint8_t nextHeader = ip6Header->ip6_nxt;
     const uint8_t* currentHeader = packet + headerSize;
     
+    std::cout << "[Receiver.cpp] IPv6 基本头部大小: " << headerSize << " 字节" << std::endl;
+    std::cout << "[Receiver.cpp] 下一个头部类型: " << (int)nextHeader << std::endl;
+
     while (nextHeader == IPPROTO_FRAGMENT || nextHeader == IPPROTO_DSTOPTS) {
         if (nextHeader == IPPROTO_FRAGMENT) {
             struct ip6_frag* fragHeader = (struct ip6_frag*)currentHeader;
             headerSize += sizeof(struct ip6_frag);
             nextHeader = fragHeader->ip6f_nxt;
             currentHeader += sizeof(struct ip6_frag);
+            std::cout << "[Receiver.cpp] 发现分片头部，大小: " << sizeof(struct ip6_frag) << " 字节" << std::endl;
         } else if (nextHeader == IPPROTO_DSTOPTS) {
             struct ip6_dest* dstopt = (struct ip6_dest*)currentHeader;
-            int optLen = (dstopt->ip6d_len + 1) * 8;
+            int optLen = (dstopt->ip6d_len) * 8 + 2;  // 正确计算目的选项头部的大小
             headerSize += optLen;
             nextHeader = dstopt->ip6d_nxt;
             currentHeader += optLen;
+            std::cout << "[Receiver.cpp] 发现目的选项头部，大小: " << optLen << " 字节" << std::endl;
         }
+        std::cout << "[Receiver.cpp] 下一个头部类型: " << (int)nextHeader << std::endl;
     }
 
-    // 检查是否有额外的有效载荷
-    return (packetSize > headerSize);
+    // 计算有效载荷长度
+    int effectivePayloadSize = payloadLen - (headerSize - sizeof(struct ip6_hdr));
+    bool hasEffectivePayload = (effectivePayloadSize > 0);
+
+    std::cout << "[Receiver.cpp] 检查有效载荷: " << std::endl;
+    std::cout << "  总长度 = " << packetSize << " 字节" << std::endl;
+    std::cout << "  IPv6负载长度 = " << payloadLen << " 字节" << std::endl;
+    std::cout << "  头部总长度 = " << headerSize << " 字节" << std::endl;
+    std::cout << "  有效载荷长度 = " << effectivePayloadSize << " 字节" << std::endl;
+    std::cout << "  是否有有效载荷: " << (hasEffectivePayload ? "是" : "否") << std::endl;
+
+    // 打印数据包的十六进制内容
+    std::cout << "[Receiver.cpp] 数据包内容 (十六进制):" << std::endl;
+    for (int i = 0; i < packetSize; ++i) {
+        printf("%02X ", packet[i]);
+        if ((i + 1) % 16 == 0) printf("\n");
+    }
+    printf("\n");
+
+    return hasEffectivePayload;
 }
 
 // 重组扩展头部分（目的选项报头）
@@ -676,7 +705,7 @@ std::vector<uint8_t> Receiver::deliverData(const FlowKey& flowKey, const std::ve
         removeFlowFromQueue(flowKey);
     }
 
-    std::cout << "[Receiver.cpp] deliverData: 处理完成" << std::endl;
+    std::cout << "[Receiver.cpp] deliverData: 处理成" << std::endl;
     return result;
 }
 
@@ -778,7 +807,7 @@ size_t Receiver::getReceivedPacketCount() const {
 }
 
 /*
-Receiver 工作流程：
+Receiver 工作程：
 
 1. 初始化
    - 构造函数被调用，初始化参数（窗口大小、MTU、网络接口等）
@@ -802,13 +831,13 @@ Receiver 工作流程：
    - 检查 IPv6 头部完整性
    - 提取流标识信息
    - 检查是否有负载
-   - 获取或创建对应的流状态
+   - 获取或创建对应流状态
    - 根据是否有负载，调用 reassembleExtensionHeader 或 reassemblePayload
    - 发送 ACK
 
 6. 重组扩展头部 (reassembleExtensionHeader)
    - 解析扩展头部（主要是目的选报头）
-   - 提取目的选项报头内容
+   - 提目的选项报头内容
    - 更新流表
 
 7. 重组负载 (reassemblePayload)

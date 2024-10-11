@@ -148,13 +148,9 @@ void IPv6Packet::addIPv6Header() {
     packet.push_back((version_traffic_flow >> 8) & 0xFF);
     packet.push_back(version_traffic_flow & 0xFF);
 
-    // 负载长度(16位)
-    uint16_t payload_length = payload.size() + extensionHeaderContent.size();
-    if (fragmentFlag) {
-        payload_length += 8; // 分片头部长度
-    }
-    packet.push_back((payload_length >> 8) & 0xFF);
-    packet.push_back(payload_length & 0xFF);
+    // 负载长度(16位) - 先占位，后面再填充正确的值
+    packet.push_back(0);
+    packet.push_back(0);
 
     // 下一个头部(8位) + 跳数限制(8位)
     packet.push_back(fragmentFlag ? 44 : 60); // 44表示分片头部，60表示目的选项头部
@@ -169,6 +165,24 @@ void IPv6Packet::addIPv6Header() {
     struct in6_addr dest_addr;
     inet_pton(AF_INET6, destIPv6.c_str(), &dest_addr);
     packet.insert(packet.end(), dest_addr.s6_addr, dest_addr.s6_addr + 16);
+
+    // 计算并设置正确的负载长度
+    uint16_t payload_length = packet.size() - sizeof(struct ip6_hdr);
+    if (!payload.empty()) {
+        payload_length += payload.size();
+    }
+    if (!extensionHeaderContent.empty()) {
+        payload_length += extensionHeaderContent.size() + 2;  // +2 for the header length and next header fields
+    }
+    if (fragmentFlag) {
+        payload_length += 8;  // 分片头部的长度
+    }
+
+    // 更新负载长度字段
+    packet[4] = (payload_length >> 8) & 0xFF;
+    packet[5] = payload_length & 0xFF;
+
+    std::cout << "[IPv6Packet.cpp] IPv6头部添加完成，负载长度: " << payload_length << " 字节" << std::endl;
 }
 
 // 添加分片头部
