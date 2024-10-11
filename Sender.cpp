@@ -4,6 +4,8 @@
 #include <pcap.h>
 #include <netinet/if_ether.h>
 #include <arpa/inet.h>
+#include <netinet/ip6.h>
+#include <netinet/icmp6.h>
 
 // 构造函数：初始化 Sender 对象
 Sender::Sender(int windowSize, size_t mtu, const std::string& interface)
@@ -17,12 +19,26 @@ Sender::Sender(int windowSize, size_t mtu, const std::string& interface)
     
     // 计算最大分片大小
     maxFragmentSize = mtu - 40 - 8;  // IPv6 header (40 bytes) + Fragment header (8 bytes)
+
+    // 初始化用于接收 ACK 的 pcap 句柄
+    ack_handle = pcap_open_live(interface.c_str(), BUFSIZ, 1, 1000, errbuf);
+    if (ack_handle == nullptr) {
+        throw std::runtime_error("无法打开网络接口以接收 ACK: " + std::string(errbuf));
+    }
+
+    // 设置过滤器，只捕获 ICMPv6 数据包
+    struct bpf_program fp;
+    pcap_compile(ack_handle, &fp, "icmp6", 0, PCAP_NETMASK_UNKNOWN);
+    pcap_setfilter(ack_handle, &fp);
 }
 
 // 析构函数：清理资源
 Sender::~Sender() {
     if (handle != nullptr) {
         pcap_close(handle);
+    }
+    if (ack_handle != nullptr) {
+        pcap_close(ack_handle);
     }
 }
 
@@ -39,7 +55,6 @@ void Sender::addPacket(const std::string& destMAC, const std::string& destIPv6,
 // 尝试发送下一个数据包
 bool Sender::sendPacket() {
     std::cout << "[Sender.cpp] 尝试发送数据包，当前序列号: " << nextSequenceNumber << std::endl;
-    // 检查是否在滑动窗口内且队列非空
     if (nextSequenceNumber < base + windowSize && !packetQueue.empty()) {
         auto& packet = packetQueue.front();
         // 对数据包进行分片
@@ -56,22 +71,23 @@ bool Sender::sendPacket() {
             }
         }
         if (allSent) {
-            std::cout << "成功发送数据包，序列号: " << nextSequenceNumber << std::endl;
-            // 更新流表，增加序列号，移除已发送的数据包
+            std::cout << "[Sender.cpp] 成功发送数据包，序列号: " << nextSequenceNumber << std::endl;
             updateFlowTable(nextSequenceNumber, true, false);
-            nextSequenceNumber++;
+            nextSequenceNumber++;  // 只有在成功发送后才增加序列号
             packetQueue.erase(packetQueue.begin());
             return true;
         } else {
-            std::cout << "发送数据包失败，序列号: " << nextSequenceNumber << std::endl;
+            std::cout << "[Sender.cpp] 发送数据包失败，序列号: " << nextSequenceNumber << std::endl;
         }
+    } else {
+        std::cout << "[Sender.cpp] 没有新的数据包需要发送" << std::endl;
     }
     return false;
 }
 
 // 处理接收到的 ACK
 void Sender::handleAck(uint32_t ackNumber) {
-    std::cout << "[Sender.cpp] 收到 ACK，确认号: " << ackNumber << std::endl;
+    std::cout << "[Sender.cpp] 处理 ACK，确认号: " << ackNumber << std::endl;
     if (ackNumber >= base) {
         // 更新已确认的数据包状态
         for (uint32_t i = base; i <= ackNumber; i++) {
@@ -236,7 +252,7 @@ std::vector<uint8_t> Sender::addEthernetFrame(const std::vector<uint8_t>& ipv6Pa
     sscanf(srcMAC.c_str(), "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx", 
            &header.ether_shost[0], &header.ether_shost[1], &header.ether_shost[2],
            &header.ether_shost[3], &header.ether_shost[4], &header.ether_shost[5]);
-    // 设置以太网类型为 IPv6
+    // 设以太网类型为 IPv6
     header.ether_type = htons(ETHERTYPE_IPV6);
     
     // 将以太网帧头添加到帧中
@@ -271,6 +287,35 @@ uint32_t Sender::calculateCRC(const std::vector<uint8_t>& data) {
 uint32_t Sender::generateUniqueIdentification() {
     static uint32_t counter = 0;
     return ++counter;
+}
+
+void Sender::receiveAck() {
+    struct pcap_pkthdr* header;
+    const u_char* packet;
+    int res = pcap_next_ex(ack_handle, &header, &packet);
+    if (res == 1) {
+        std::cout << "[Sender.cpp] 接到 ACK 数据包" << std::endl;
+        processAckPacket(packet, header->len);
+    }
+}
+
+void Sender::processAckPacket(const uint8_t* packet, int size) {
+    // 跳过以太网头部
+    const uint8_t* ipv6_packet = packet + 14;
+    int ipv6_size = size - 14;
+
+    if (ipv6_size < sizeof(struct ip6_hdr) + sizeof(struct icmp6_hdr)) {
+        return;  // 数据包太小，不是有效的 ICMPv6 包
+    }
+
+    struct ip6_hdr* ipv6_header = (struct ip6_hdr*)ipv6_packet;
+    struct icmp6_hdr* icmp6_header = (struct icmp6_hdr*)(ipv6_packet + sizeof(struct ip6_hdr));
+
+    if (icmp6_header->icmp6_type == ICMP6_ECHO_REPLY) {
+        // 提取 ACK 号（假设存储在 ICMP echo reply 的 id 字段中）
+        uint32_t ack_number = ntohs(icmp6_header->icmp6_id);
+        handleAck(ack_number);
+    }
 }
 
 /*

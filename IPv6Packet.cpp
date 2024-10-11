@@ -4,6 +4,7 @@
 #include <stdexcept>
 #include <pcap.h>
 #include <netinet/in.h>
+#include <netinet/ip6.h>  // 添加这行，用于 struct ip6_hdr 的定义
 #include <arpa/inet.h>
 #include <ifaddrs.h>
 #include <cstring>
@@ -17,14 +18,21 @@
 #include <net/if_types.h>  // 添加这行来包含 IFT_ETHER 的定义
 
 // 构造函数：初始化IPv6Packet对象
-IPv6Packet::IPv6Packet(const std::string& destMAC, const std::string& destIPv6, const std::vector<uint8_t>& payload, const std::vector<uint8_t>& extensionHeaderContent, bool fragmentFlag,
-                        uint16_t fragmentOffset,
-                        bool moreFragments,
-                        uint32_t identification)
-    : destMAC(destMAC), destIPv6(destIPv6), payload(payload), 
-      extensionHeaderContent(extensionHeaderContent), fragmentFlag(fragmentFlag),
-      fragmentOffset(fragmentOffset), moreFragments(moreFragments), 
-      identification(identification), packetLength(0), packetHeaderAddress(nullptr) {
+IPv6Packet::IPv6Packet(const std::string& destMAC, const std::string& destIPv6, 
+                       const std::vector<uint8_t>& payload, 
+                       const std::vector<uint8_t>& extensionHeaderContent, 
+                       bool fragmentFlag,
+                       uint16_t fragmentOffset,
+                       bool moreFragments,
+                       uint32_t identification)
+    : destMAC(destMAC), destIPv6(destIPv6), 
+      extensionHeaderContent(extensionHeaderContent),
+      payload(payload), 
+      packetLength(0), packetHeaderAddress(nullptr),
+      fragmentFlag(fragmentFlag),
+      fragmentOffset(fragmentOffset), 
+      moreFragments(moreFragments), 
+      identification(identification) {
     fetchLocalMAC();  // 获取本地MAC地址
     fetchLocalIPv6(); // 获取本地IPv6地址
 }
@@ -40,6 +48,13 @@ void IPv6Packet::constructPacket() {
     packet.insert(packet.end(), payload.begin(), payload.end()); // 添加负载数据
     packetLength = packet.size(); // 更新数据包长度
     packetHeaderAddress = packet.data(); // 设置数据包头部地址
+
+    // 更新IPv6头部中的负载长度字段
+    uint16_t payloadLength = packetLength - sizeof(struct ip6_hdr);
+    packet[4] = (payloadLength >> 8) & 0xFF;
+    packet[5] = payloadLength & 0xFF;
+
+    std::cout << "[IPv6Packet.cpp] 构造的数据包总长度: " << packetLength << " 字节" << std::endl;
 }
 
 // 获取构造好的数据包
@@ -189,11 +204,29 @@ void IPv6Packet::addExtensionHeader() {
     packet.push_back(0x3B); // No Next Header
 
     // Header Extension Length (8位) - 以8字节为单位，不包括前8个字节
-    uint8_t hdr_ext_len = (extensionHeaderContent.size() + 2) / 8; // 计算扩展头部长度
+    uint8_t hdr_ext_len = (extensionHeaderContent.size() + 2 + 7) / 8; // 计算扩展头部长度，向上取整
     packet.push_back(hdr_ext_len);
+
+    // 添加填充选项以确保总长度是8的倍数
+    uint8_t paddingLength = 8 - ((extensionHeaderContent.size() + 2) % 8);
+    if (paddingLength == 8) paddingLength = 0;
+
+    // 添加选项类型（我们使用0作为填充选项）
+    packet.push_back(0x00);
+
+    // 添加选项长度（选项内容的长度）
+    packet.push_back(static_cast<uint8_t>(extensionHeaderContent.size()));
 
     // 添加选项内容
     packet.insert(packet.end(), extensionHeaderContent.begin(), extensionHeaderContent.end());
+
+    // 添加填充
+    for (uint8_t i = 0; i < paddingLength; ++i) {
+        packet.push_back(0x00);
+    }
+
+    std::cout << "[IPv6Packet.cpp] 目的选项报头长度: " << static_cast<int>(hdr_ext_len) << " (8字节单位)" << std::endl;
+    std::cout << "[IPv6Packet.cpp] 添加的填充长度: " << static_cast<int>(paddingLength) << " 字节" << std::endl;
 }
 
 // 输出数据包的详细信息

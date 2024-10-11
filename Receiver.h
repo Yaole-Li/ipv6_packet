@@ -78,6 +78,9 @@ public:
     // 获取接收到的数据
     std::vector<std::vector<uint8_t>> getReceivedData();
 
+    // 获取接收到的数据包数量
+    size_t getReceivedPacketCount() const;
+
 private:
     // 数据包状态结构体，用于跟踪每个接收到的数据包
     struct PacketStatus {
@@ -188,6 +191,8 @@ private:
     std::mutex receivedDataMutex;  // 用于保护 receivedData 的互斥锁
 
     std::atomic<bool> stopRequested;
+
+    std::atomic<size_t> receivedPacketCount;  // 接收到的数据包计数器
 };
 
 #endif // RECEIVER_H
