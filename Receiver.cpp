@@ -10,7 +10,8 @@
 
 // 构造函数：初始化接收器
 Receiver::Receiver(int windowSize, size_t mtu, const std::string& interface, int threadCount)
-    : windowSize(windowSize), mtu(mtu), interface(interface), threadCount(threadCount), running(true) {
+    : windowSize(windowSize), mtu(mtu), interface(interface), threadCount(threadCount), 
+      running(true), stopRequested(false) {
     // 初始化 libpcap，用于接收数据包
     char errbuf[PCAP_ERRBUF_SIZE];
     handle = pcap_open_live(interface.c_str(), BUFSIZ, 1, 1000, errbuf);
@@ -68,7 +69,11 @@ void Receiver::startReceiving() {
     // 启动 libpcap 循环，开始捕获数据包
     pcap_loop(handle, 0, [](u_char* userData, const struct pcap_pkthdr* pkthdr, const u_char* packet) {
         auto* receiver = reinterpret_cast<Receiver*>(userData);
-        receiver->packetHandler(userData, pkthdr, packet);
+        if (receiver->stopRequested.load()) {
+            pcap_breakloop(receiver->handle);
+        } else {
+            receiver->packetHandler(userData, pkthdr, packet);
+        }
     }, reinterpret_cast<u_char*>(this));
 
     // 等待所有工作线程结束
@@ -83,13 +88,13 @@ void Receiver::startReceiving() {
 
 // libpcap 回调函数，用于处理接收到的数据包
 void Receiver::packetHandler(u_char* userData, const struct pcap_pkthdr* pkthdr, const u_char* packet) {
-    std::cout << "接收到数据包，大小: " << pkthdr->len << " 字节" << std::endl;
+    std::cout << "[Receiver.cpp] 接收到数据包，大小: " << pkthdr->len << " 字节" << std::endl;
     (void)userData;
 
     // 解析以太网帧头
     struct ether_header* ethHeader = (struct ether_header*)packet;
     if (ntohs(ethHeader->ether_type) != ETHERTYPE_IPV6) {
-        std::cout << "非 IPv6 数据包，忽略" << std::endl;
+        // std::cout << "非 IPv6 数据包，忽略" << std::endl;
         return;
     }
 
@@ -100,7 +105,7 @@ void Receiver::packetHandler(u_char* userData, const struct pcap_pkthdr* pkthdr,
     char destIP[INET6_ADDRSTRLEN];
     inet_ntop(AF_INET6, &ipv6Header->ip6_dst, destIP, INET6_ADDRSTRLEN);
     if (std::string(destIP) != dummyPacket->getSrcIPv6()) {
-        std::cout << "数据包目的地址不是本机，忽略" << std::endl;
+        // std::cout << "数据包目的地址不是本机，忽略" << std::endl;
         return;
     }
 
@@ -121,7 +126,7 @@ void Receiver::packetHandler(u_char* userData, const struct pcap_pkthdr* pkthdr,
     }
 
     if (!hasDstOpt) {
-        std::cout << "数据包不包含目的选项头部，忽略" << std::endl;
+        // std::cout << "数据包不包含目的选项头部，忽略" << std::endl;
         return;
     }
 
@@ -162,7 +167,7 @@ void Receiver::workerThread(int threadId) {
 
 // 处理单个数据包
 void Receiver::handlePacket(const std::vector<uint8_t>& packetData) {
-    std::cout << "处理数据包，大小: " << packetData.size() << " 字节" << std::endl;
+    std::cout << "[Receiver.cpp] 处理数据包，大小: " << packetData.size() << " 字节" << std::endl;
     if (!checkIPv6Header(packetData.data(), packetData.size())) {
         std::cout << "IPv6 头部不完整，丢弃数据包" << std::endl;
         return;
@@ -229,6 +234,7 @@ FlowKey Receiver::extractFlowKey(const std::vector<uint8_t>& packetData) {
 
 // 检查 IPv6 头部是否完整
 bool Receiver::checkIPv6Header(const uint8_t* packet, int packetSize) {
+    (void)packet;  // 避免未使用参数的警告
     if (static_cast<size_t>(packetSize) < sizeof(struct ip6_hdr)) {
         return false;
     }
@@ -246,7 +252,7 @@ bool Receiver::checkPayload(const uint8_t* packet, int packetSize) {
 
 // 重组扩展头部分（目的选项报头）
 uint32_t Receiver::reassembleExtensionHeader(const FlowKey& flowKey, const uint8_t* packet, int packetSize) {
-    std::cout << "重组扩展头部，流标识: " << flowKey.srcIP << ":" << flowKey.srcPort << " -> " 
+    std::cout << "[Receiver.cpp] 重组扩展头部，流标识: " << flowKey.srcIP << ":" << flowKey.srcPort << " -> " 
               << flowKey.destIP << ":" << flowKey.destPort << std::endl;
     struct ip6_hdr* ip6Header = (struct ip6_hdr*)packet;
     uint8_t nextHeader = ip6Header->ip6_nxt;
@@ -289,7 +295,7 @@ uint32_t Receiver::reassembleExtensionHeader(const FlowKey& flowKey, const uint8
 
 // 重组负载部分
 uint32_t Receiver::reassemblePayload(const FlowKey& flowKey, const uint8_t* packet, int packetSize) {
-    std::cout << "重组负载，流标识: " << flowKey.srcIP << ":" << flowKey.srcPort << " -> " 
+    std::cout << "[Receiver.cpp] 重组负载，流标识: " << flowKey.srcIP << ":" << flowKey.srcPort << " -> " 
               << flowKey.destIP << ":" << flowKey.destPort << std::endl;
     struct ip6_hdr* ip6Header = (struct ip6_hdr*)packet;
     int headerLen = sizeof(struct ip6_hdr);
@@ -427,7 +433,7 @@ void Receiver::sendAck(const FlowKey& flowKey, uint32_t ackNumber) {
     if (pcap_sendpacket(handle, ackPacket.data(), ackPacket.size()) != 0) {
         std::cerr << "发送 ACK 失败: " << pcap_geterr(handle) << std::endl;
     } else {
-        std::cout << "发送 ACK: " << ackNumber << " 给 " << flowKey.srcIP << ":" << flowKey.srcPort << std::endl;
+        std::cout << "[Receiver.cpp] 发送 ACK: " << ackNumber << " 给 " << flowKey.srcIP << ":" << flowKey.srcPort << std::endl;
     }
 }
 
@@ -480,7 +486,7 @@ uint16_t Receiver::calculateICMPv6Checksum(const std::vector<uint8_t>& packet, c
 
 // 更新流表
 uint32_t Receiver::updateFlowTable(const FlowKey& flowKey, uint32_t sequenceNumber, const std::vector<uint8_t>& data) {
-    std::cout << "更新流表，序列号: " << sequenceNumber << ", 数据大小: " << data.size() << " 字节" << std::endl;
+    std::cout << "[Receiver.cpp] 更新流表，序列号: " << sequenceNumber << ", 数据大小: " << data.size() << " 字节" << std::endl;
     auto& flowState = flows[flowKey];
     flowState->flowTable[sequenceNumber] = {data, true, std::chrono::steady_clock::now()};
 
@@ -590,12 +596,19 @@ std::vector<uint8_t> Receiver::reassemblePacket(const std::map<uint32_t, PacketS
 }
 
 void Receiver::stop() {
+    stopRequested = true;
     running = false;
+    // 通知所有工作线程
+    for (auto& cv : queueCVs) {
+        cv->notify_all();
+    }
+    // 中断 pcap 循环
+    pcap_breakloop(handle);
 }
 
 // 清理超时的数据流
 void Receiver::cleanupTimedOutFlows() {
-    std::cout << "开始清理超时数据流" << std::endl;
+    std::cout << "[Receiver.cpp] 开始清理超时数据流" << std::endl;
     std::lock_guard<std::mutex> lock(flowListMutex);
     auto now = std::chrono::steady_clock::now();
     auto it = flowList.begin();
@@ -650,7 +663,7 @@ void Receiver::updateFlowActivity(const FlowKey& flowKey) {
 }
 
 // 在文件末尾添加这个新方法的实现
-std::vector<std::vector<uint8_t>> Receiver::getReceivedData() const {
+std::vector<std::vector<uint8_t>> Receiver::getReceivedData() {
     std::lock_guard<std::mutex> lock(receivedDataMutex);
     return receivedData;
 }
@@ -661,7 +674,7 @@ Receiver 工作流程：
 1. 初始化
    - 构造函数被调用，初始化参数（窗口大小、MTU、网络接口等）
    - 创建 libpcap 句柄，准备捕获数据包
-   - 初始��工作线程相关的数据结构（队列、互斥锁、条件变量）
+   - 初始工作线程相关的数据结构（队列、互斥锁、条件变量）
 
 2. 启动接收过程 (startReceiving)
    - 创建多个工作线程

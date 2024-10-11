@@ -49,7 +49,7 @@ const std::vector<uint8_t>& IPv6Packet::getPacket() const {
 
 // 获取本地MAC地址
 void IPv6Packet::fetchLocalMAC() {
-    std::cout << "获取本地MAC地址" << std::endl;
+    std::cout << "[IPv6Packet.cpp] 获取本地MAC地址" << std::endl;
     
     struct ifaddrs *ifap, *ifaptr;
     unsigned char *ptr;
@@ -64,7 +64,7 @@ void IPv6Packet::fetchLocalMAC() {
                     snprintf(mac, sizeof(mac), "%02x:%02x:%02x:%02x:%02x:%02x", 
                              ptr[0], ptr[1], ptr[2], ptr[3], ptr[4], ptr[5]);
                     srcMAC = mac;
-                    std::cout << "本地MAC地址: " << srcMAC << std::endl;
+                    std::cout << "[IPv6Packet.cpp] 本地MAC地址: " << srcMAC << std::endl;
                     freeifaddrs(ifap);
                     return;
                 }
@@ -78,7 +78,7 @@ void IPv6Packet::fetchLocalMAC() {
 
 // 获取本地IPv6地址
 void IPv6Packet::fetchLocalIPv6() {
-    std::cout << "获取本地IPv6地址" << std::endl;
+    std::cout << "[IPv6Packet.cpp] 获取本地IPv6地址" << std::endl;
     struct ifaddrs* ifaddr;
     struct ifaddrs* ifa;
     int family, s;
@@ -109,7 +109,7 @@ void IPv6Packet::fetchLocalIPv6() {
             }
 
             srcIPv6 = host;
-            std::cout << "本地IPv6地址: " << srcIPv6 << std::endl;
+            std::cout << "[IPv6Packet.cpp] 本地IPv6地址: " << srcIPv6 << std::endl;
             found = true;
             break;
         }
@@ -124,7 +124,7 @@ void IPv6Packet::fetchLocalIPv6() {
 
 // 添加IPv6基本头部
 void IPv6Packet::addIPv6Header() {
-    // std::cout << "添加IPv6头部，源地址: " << srcIPv6 << " \n目的地址: " << destIPv6 << std::endl;
+    std::cout << "[IPv6Packet.cpp] 添加IPv6头部" << std::endl;
 
     // 版本(4位) + 流量类别(8位) + 流标签(20位)
     uint32_t version_traffic_flow = (6 << 28); // 版本6
@@ -158,7 +158,7 @@ void IPv6Packet::addIPv6Header() {
 
 // 添加分片头部
 void IPv6Packet::addFragmentHeader() {
-    std::cout << "添加分片头部" << std::endl;
+    std::cout << "[IPv6Packet.cpp] 添加分片头部" << std::endl;
 
     // Next Header (8位) - 指示下一个头部的类型
     packet.push_back(60); // 60表示目的选项头部
@@ -183,7 +183,7 @@ void IPv6Packet::addFragmentHeader() {
 
 // 添加目的选项报头
 void IPv6Packet::addExtensionHeader() {
-    std::cout << "添加目的选项报头" << std::endl;
+    std::cout << "[IPv6Packet.cpp] 添加目的选项报头" << std::endl;
 
     // Next Header (8位) - 指示下一个头部的类型
     packet.push_back(0x3B); // No Next Header
@@ -198,7 +198,7 @@ void IPv6Packet::addExtensionHeader() {
 
 // 输出数据包的详细信息
 void IPv6Packet::printPacketDetails() const {
-    std::cout << "数据包详细信息：" << std::endl;
+    std::cout << "[IPv6Packet.cpp] 数据包详细信息：" << std::endl;
     std::cout << "源MAC地址: " << srcMAC << std::endl;
     std::cout << "目标MAC地址: " << destMAC << std::endl;
     std::cout << "源IPv6地址: " << srcIPv6 << std::endl;

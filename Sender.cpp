@@ -38,7 +38,7 @@ void Sender::addPacket(const std::string& destMAC, const std::string& destIPv6,
 
 // 尝试发送下一个数据包
 bool Sender::sendPacket() {
-    std::cout << "尝试发送数据包，当前序列号: " << nextSequenceNumber << std::endl;
+    std::cout << "[Sender.cpp] 尝试发送数据包，当前序列号: " << nextSequenceNumber << std::endl;
     // 检查是否在滑动窗口内且队列非空
     if (nextSequenceNumber < base + windowSize && !packetQueue.empty()) {
         auto& packet = packetQueue.front();
@@ -71,7 +71,7 @@ bool Sender::sendPacket() {
 
 // 处理接收到的 ACK
 void Sender::handleAck(uint32_t ackNumber) {
-    std::cout << "收到 ACK，确认号: " << ackNumber << std::endl;
+    std::cout << "[Sender.cpp] 收到 ACK，确认号: " << ackNumber << std::endl;
     if (ackNumber >= base) {
         // 更新已确认的数据包状态
         for (uint32_t i = base; i <= ackNumber; i++) {
@@ -87,7 +87,7 @@ void Sender::handleAck(uint32_t ackNumber) {
 
 // 检查超时的数据包
 void Sender::checkTimeouts() {
-    std::cout << "检查超时数据包" << std::endl;
+    std::cout << "[Sender.cpp] 检查超时数据包" << std::endl;
     auto now = std::chrono::steady_clock::now();
     for (auto& entry : flowTable) {
         if (entry.second.sent && !entry.second.acknowledged) {
@@ -108,7 +108,7 @@ void Sender::updateFlowTable(uint32_t sequenceNumber, bool sent, bool acknowledg
 
 // 重新发送数据包
 void Sender::retransmitPacket(uint32_t sequenceNumber) {
-    std::cout << "重新发送数据包，序列号: " << sequenceNumber << std::endl;
+    std::cout << "[Sender.cpp] 重新发送数据包，序列号: " << sequenceNumber << std::endl;
     if (flowTable.find(sequenceNumber) != flowTable.end()) {
         auto& packetStatus = flowTable[sequenceNumber];
         // 重新分片并发送
@@ -215,7 +215,7 @@ bool Sender::sendFragment(const std::vector<uint8_t>& fragmentPacket, uint32_t s
         return false;
     }
     
-    std::cout << "发送分片，序列号: " << sequenceNumber << ", 偏移: " << fragmentOffset 
+    std::cout << "[Sender.cpp] 发送分片，序列号: " << sequenceNumber << ", 偏移: " << fragmentOffset 
               << ", 大小: " << ethernetFrame.size() << " 字节" << std::endl;
     return true;
 }

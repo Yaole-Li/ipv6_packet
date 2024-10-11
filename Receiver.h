@@ -76,7 +76,7 @@ public:
     void stop();
 
     // 获取接收到的数据
-    std::vector<std::vector<uint8_t>> getReceivedData() const;
+    std::vector<std::vector<uint8_t>> getReceivedData();
 
 private:
     // 数据包状态结构体，用于跟踪每个接收到的数据包
@@ -183,9 +183,11 @@ private:
     // 添加 FLOW_TIMEOUT 常量
     const std::chrono::minutes FLOW_TIMEOUT{5};  // 5分钟超时
 
-    // 添加一个新的成员变量来存储接收到的数据
+    // 添加一个新的成变量来存储接收到的数据
     std::vector<std::vector<uint8_t>> receivedData;
     std::mutex receivedDataMutex;  // 用于保护 receivedData 的互斥锁
+
+    std::atomic<bool> stopRequested;
 };
 
 #endif // RECEIVER_H
@@ -246,5 +248,5 @@ Receiver 类流程图：
 |    (sendAck)      |
 +-------------------+
 
-注：流程可能会根据实际情况循环或跳转
+注：流程可能会根据际情况循环或跳转
 */
