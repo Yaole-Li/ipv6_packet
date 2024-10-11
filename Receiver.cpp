@@ -262,7 +262,7 @@ bool Receiver::checkIPv6Header(const uint8_t* packet, int packetSize) {
     return true;
 }
 
-// 检查是否有负载
+// 检查是否有有效载荷
 bool Receiver::checkPayload(const uint8_t* packet, int packetSize) {
     struct ip6_hdr* ip6Header = (struct ip6_hdr*)packet;
     uint16_t payloadLen = ntohs(ip6Header->ip6_plen);
