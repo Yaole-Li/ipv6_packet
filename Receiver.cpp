@@ -475,60 +475,37 @@ std::vector<uint8_t> Receiver::handleReassembledPacket(const FlowKey& flowKey, c
 
 // 发送 ACK
 void Receiver::sendAck(const FlowKey& flowKey, uint32_t ackNumber) {
-    std::vector<uint8_t> ackPacket;
-    
-    // 添加以太网帧头 (14 字节)
-    struct ether_header ethHeader;
-    // 设置目标 MAC 地址为数据包的源 MAC 地址
-    std::string destMac = flowKey.srcMAC;
-    sscanf(destMac.c_str(), "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx", 
-           &ethHeader.ether_dhost[0], &ethHeader.ether_dhost[1], &ethHeader.ether_dhost[2],
-           &ethHeader.ether_dhost[3], &ethHeader.ether_dhost[4], &ethHeader.ether_dhost[5]);
-    // 设置源 MAC 地址为本地 MAC 地址
-    std::string srcMac = dummyPacket->getSrcMAC();
-    sscanf(srcMac.c_str(), "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx", 
-           &ethHeader.ether_shost[0], &ethHeader.ether_shost[1], &ethHeader.ether_shost[2],
-           &ethHeader.ether_shost[3], &ethHeader.ether_shost[4], &ethHeader.ether_shost[5]);
-    // 设置以太网类型为 IPv6
-    ethHeader.ether_type = htons(ETHERTYPE_IPV6);
-    
-    // 将以太网帧头添加到 ackPacket
-    ackPacket.insert(ackPacket.end(), reinterpret_cast<uint8_t*>(&ethHeader), 
-                     reinterpret_cast<uint8_t*>(&ethHeader) + sizeof(struct ether_header));
+    std::cout << "[Receiver.cpp] 发送 ACK: " << ackNumber << " 给 " << flowKey.srcIP << ":" << flowKey.srcPort << std::endl;
 
-    // 添加 IPv6 头部 (40 字节)
+    // 构造 IPv6 头部
     struct ip6_hdr ipv6Header;
-    ipv6Header.ip6_flow = htonl((6 << 28)); // 版本 6
-    ipv6Header.ip6_plen = htons(8); // ACK 信息的长度
-    ipv6Header.ip6_nxt = IPPROTO_ICMPV6; // 下个头部是 ICMPv6
-    ipv6Header.ip6_hlim = 64; // 跳限制
-    inet_pton(AF_INET6, dummyPacket->getSrcIPv6().c_str(), &ipv6Header.ip6_src); // 源 IPv6 地址
-    inet_pton(AF_INET6, flowKey.srcIP.c_str(), &ipv6Header.ip6_dst); // 目标 IPv6 地址
+    memset(&ipv6Header, 0, sizeof(ipv6Header));
+    ipv6Header.ip6_flow = htonl((6 << 28));
+    ipv6Header.ip6_plen = htons(12);  // ACK 号(4) + 原始包标识符(4) + 源端口(2) + 目标端口(2)
+    ipv6Header.ip6_nxt = 253;  // 使用自定义协议号
+    ipv6Header.ip6_hlim = 255;
+    inet_pton(AF_INET6, flowKey.destIP.c_str(), &ipv6Header.ip6_src);
+    inet_pton(AF_INET6, flowKey.srcIP.c_str(), &ipv6Header.ip6_dst);
 
-    // 将 IPv6 头部添加到 ackPacket
-    ackPacket.insert(ackPacket.end(), reinterpret_cast<uint8_t*>(&ipv6Header), 
-                     reinterpret_cast<uint8_t*>(&ipv6Header) + sizeof(struct ip6_hdr));
+    // 构造 ACK 负载
+    std::vector<uint8_t> ackPayload;
+    uint32_t networkAckNumber = htonl(ackNumber);
+    ackPayload.insert(ackPayload.end(), reinterpret_cast<uint8_t*>(&networkAckNumber), reinterpret_cast<uint8_t*>(&networkAckNumber) + 4);
+    uint32_t originalPacketId = htonl(flowKey.identification);
+    ackPayload.insert(ackPayload.end(), reinterpret_cast<uint8_t*>(&originalPacketId), reinterpret_cast<uint8_t*>(&originalPacketId) + 4);
+    uint16_t srcPort = htons(flowKey.srcPort);
+    ackPayload.insert(ackPayload.end(), reinterpret_cast<uint8_t*>(&srcPort), reinterpret_cast<uint8_t*>(&srcPort) + 2);
+    uint16_t dstPort = htons(flowKey.destPort);
+    ackPayload.insert(ackPayload.end(), reinterpret_cast<uint8_t*>(&dstPort), reinterpret_cast<uint8_t*>(&dstPort) + 2);
 
-    // 添加 ICMPv6 ACK 信息 (8 字节，简化版)
-    ackPacket.push_back(58); // ICMPv6 类型：信息回应
-    ackPacket.push_back(0);  // 代码：0
-    ackPacket.push_back(0);  // 校验和占位符
-    ackPacket.push_back(0);  // 校验和占位符
-    ackPacket.push_back((ackNumber >> 24) & 0xFF); // ACK 号
-    ackPacket.push_back((ackNumber >> 16) & 0xFF);
-    ackPacket.push_back((ackNumber >> 8) & 0xFF);
-    ackPacket.push_back(ackNumber & 0xFF);
+    // 构造完整的 IPv6 数据包
+    std::vector<uint8_t> packet;
+    packet.insert(packet.end(), reinterpret_cast<uint8_t*>(&ipv6Header), reinterpret_cast<uint8_t*>(&ipv6Header) + sizeof(ipv6Header));
+    packet.insert(packet.end(), ackPayload.begin(), ackPayload.end());
 
-    // 计算 ICMPv6 校验和
-    uint16_t checksum = calculateICMPv6Checksum(ackPacket, ipv6Header);
-    ackPacket[54] = (checksum >> 8) & 0xFF;
-    ackPacket[55] = checksum & 0xFF;
-
-    // 使用 libpcap 发送 ACK 数据包
-    if (pcap_sendpacket(handle, ackPacket.data(), ackPacket.size()) != 0) {
-        std::cerr << "[Receiver.cpp] 发送 ACK 失败: " << pcap_geterr(handle) << std::endl;
-    } else {
-        std::cout << "[Receiver.cpp] 发送 ACK: " << ackNumber << " 给 " << flowKey.srcIP << ":" << flowKey.srcPort << std::endl;
+    // 发送数据包
+    if (pcap_sendpacket(handle, packet.data(), packet.size()) != 0) {
+        std::cerr << "发送 ACK 失败: " << pcap_geterr(handle) << std::endl;
     }
 }
 

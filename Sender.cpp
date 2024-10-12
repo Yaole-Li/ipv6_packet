@@ -93,11 +93,14 @@ void Sender::handleAck(uint32_t ackNumber) {
         for (uint32_t i = base; i <= ackNumber; i++) {
             if (flowTable.find(i) != flowTable.end()) {
                 flowTable[i].acknowledged = true;
+                std::cout << "[Sender.cpp] 数据包 " << i << " 已被确认" << std::endl;
             }
         }
         // 移动滑动窗口
         base = ackNumber + 1;
-        std::cout << "收到ACK，更新base为: " << base << std::endl;
+        std::cout << "[Sender.cpp] 更新滑动窗口基准序列号为: " << base << std::endl;
+    } else {
+        std::cout << "[Sender.cpp] 收到重复 ACK，序列号: " << ackNumber << std::endl;
     }
 }
 
@@ -220,7 +223,7 @@ std::vector<std::vector<uint8_t>> Sender::fragmentPacket(const IPv6Packet& packe
 
 // 发送单个分片
 bool Sender::sendFragment(const std::vector<uint8_t>& fragmentPacket, uint32_t sequenceNumber, uint16_t fragmentOffset, bool moreFragments) {
-    (void)moreFragments;  // 避免未使用参数的警告
+    (void)moreFragments;  // 避免使用参数的警告
     
     // 添加以太网帧头和尾
     std::vector<uint8_t> ethernetFrame = addEthernetFrame(fragmentPacket);
@@ -248,7 +251,7 @@ std::vector<uint8_t> Sender::addEthernetFrame(const std::vector<uint8_t>& ipv6Pa
            &header.ether_dhost[0], &header.ether_dhost[1], &header.ether_dhost[2],
            &header.ether_dhost[3], &header.ether_dhost[4], &header.ether_dhost[5]);
     // 解析源 MAC 地址
-    std::string srcMAC = "AA:BB:CC:DD:EE:FF";  // 这里需要替换为实际的源 MAC 地址
+    std::string srcMAC = "AA:BB:CC:DD:EE:FF";  // 这里需要替换为实源 MAC 地址
     sscanf(srcMAC.c_str(), "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx", 
            &header.ether_shost[0], &header.ether_shost[1], &header.ether_shost[2],
            &header.ether_shost[3], &header.ether_shost[4], &header.ether_shost[5]);
@@ -294,28 +297,54 @@ void Sender::receiveAck() {
     const u_char* packet;
     int res = pcap_next_ex(ack_handle, &header, &packet);
     if (res == 1) {
-        std::cout << "[Sender.cpp] 接到 ACK 数据包" << std::endl;
-        processAckPacket(packet, header->len);
+        std::cout << "[Sender.cpp] 接收到潜在的 ACK 数据包，大小: " << header->len << " 字节" << std::endl;
+        uint32_t ack_number = processAckPacket(packet, header->len);
+        if (ack_number != 0) {
+            std::cout << "[Sender.cpp] 接收到有效的 ACK，确认号: " << ack_number << std::endl;
+            handleAck(ack_number);
+        } else {
+            std::cout << "[Sender.cpp] 接收到的数据包不是有效的 ACK" << std::endl;
+        }
+    } else if (res == 0) {
+        std::cout << "[Sender.cpp] 等待 ACK 超时" << std::endl;
+    } else {
+        std::cout << "[Sender.cpp] 接收 ACK 时发生错误: " << pcap_geterr(ack_handle) << std::endl;
     }
 }
 
-void Sender::processAckPacket(const uint8_t* packet, int size) {
+uint32_t Sender::processAckPacket(const uint8_t* packet, int size) {
+    std::cout << "[Sender.cpp] 开始处理潜在的 ACK 数据包" << std::endl;
+    
     // 跳过以太网头部
     const uint8_t* ipv6_packet = packet + 14;
     int ipv6_size = size - 14;
 
-    if (ipv6_size < sizeof(struct ip6_hdr) + sizeof(struct icmp6_hdr)) {
-        return;  // 数据包太小，不是有效的 ICMPv6 包
+    if (ipv6_size < static_cast<int>(sizeof(struct ip6_hdr) + 12)) {
+        std::cout << "[Sender.cpp] 数据包太小，不是有效的 ACK 包" << std::endl;
+        return 0;
     }
 
     struct ip6_hdr* ipv6_header = (struct ip6_hdr*)ipv6_packet;
-    struct icmp6_hdr* icmp6_header = (struct icmp6_hdr*)(ipv6_packet + sizeof(struct ip6_hdr));
+    
+    std::cout << "[Sender.cpp] IPv6 下一个头部: " << (int)ipv6_header->ip6_nxt << std::endl;
 
-    if (icmp6_header->icmp6_type == ICMP6_ECHO_REPLY) {
-        // 提取 ACK 号（假设存储在 ICMP echo reply 的 id 字段中）
-        uint32_t ack_number = ntohs(icmp6_header->icmp6_id);
-        handleAck(ack_number);
+    if (ipv6_header->ip6_nxt == 253) {  // 我们的自定义协议号
+        const uint8_t* ack_data = ipv6_packet + sizeof(struct ip6_hdr);
+        uint32_t ack_number = ntohl(*reinterpret_cast<const uint32_t*>(ack_data));
+        uint32_t original_packet_id = ntohl(*reinterpret_cast<const uint32_t*>(ack_data + 4));
+        uint16_t src_port = ntohs(*reinterpret_cast<const uint16_t*>(ack_data + 8));
+        uint16_t dst_port = ntohs(*reinterpret_cast<const uint16_t*>(ack_data + 10));
+
+        std::cout << "[Sender.cpp] 接收到 ACK，确认号: " << ack_number 
+                  << ", 原始包 ID: " << original_packet_id
+                  << ", 源端口: " << src_port
+                  << ", 目标端口: " << dst_port << std::endl;
+
+        return ack_number;
     }
+
+    std::cout << "[Sender.cpp] 不是预期的 ACK 包" << std::endl;
+    return 0;
 }
 
 /*

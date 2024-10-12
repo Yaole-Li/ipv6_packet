@@ -33,10 +33,12 @@ mutex console_mutex;
 // Sender 线程函数
 void senderThread(Sender& sender) {
     while (running) {
-        sender.sendPacket();
-        sender.receiveAck();  // 添加这行
+        if (sender.sendPacket()) {
+            cout << "[Sender Thread] 成功发送数据包" << endl;
+        }
+        sender.receiveAck();
         sender.checkTimeouts();
-        this_thread::sleep_for(chrono::milliseconds(100));  // 减少睡眠时间以更频繁地检查 ACK
+        this_thread::sleep_for(chrono::milliseconds(100));
     }
 }
 
@@ -104,12 +106,34 @@ int main() {
         // 启动接收器
         receiver.startReceiving();
 
-        // 主线程等待用户输入以结束程序
-        cout << "[main] 按回车键结束程序..." << endl;
-        cin.get();
+        // 主循环
+        int counter = 0;
+        while (running) {
+            this_thread::sleep_for(chrono::seconds(1));
+            counter++;
 
-        // 设置 running 为 false，通知线程结束
-        running = false;
+            if (counter % 5 == 0) {  // 每5秒检查一次
+                vector<vector<uint8_t>> receivedData = receiver.getReceivedData();
+                cout << "[Main] 接收到的数据包数量: " << receiver.getReceivedPacketCount() << endl;
+                cout << "[Main] 处理的数据包数量: " << receivedData.size() << endl;
+                
+                for (size_t i = 0; i < receivedData.size(); ++i) {
+                    cout << "[Main] 数据包 " << i + 1 << " 内容: ";
+                    for (const auto& byte : receivedData[i]) {
+                        cout << hex << setw(2) << setfill('0') << static_cast<int>(byte) << " ";
+                    }
+                    cout << endl;
+
+                    // 尝试将内容解释为字符串
+                    string content(receivedData[i].begin(), receivedData[i].end());
+                    cout << "[Main] 解释为字符串: " << content << endl;
+                }
+            }
+
+            if (counter >= 60) {  // 运行60秒后退出
+                running = false;
+            }
+        }
 
         // 等待线程结束
         senderT.join();

@@ -108,7 +108,7 @@ private:
     pcap_t* ack_handle;
 
     // 处理接收到的 ACK 数据包
-    void processAckPacket(const uint8_t* packet, int size);
+    uint32_t processAckPacket(const uint8_t* packet, int size);
 };
 
 #endif // SENDER_H
