@@ -68,7 +68,10 @@ void receiverThread(Receiver& receiver) {
 
 void test() {
     cout << "[main] 测试函数" << endl;
-    
+}
+
+void test_lyl() {
+    cout << "[main] lyl测试函数" << endl;
 }
 
 int main() {
