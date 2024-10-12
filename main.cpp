@@ -78,6 +78,10 @@ void test_sws() {
     cout << "[main] sws测试函数" << endl;
 }
 
+void test_syy() {
+    cout << "[main] syy测试函数" << endl;
+}
+
 int main() {
     try {
         int windowSize = 10;
