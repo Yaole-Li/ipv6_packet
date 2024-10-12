@@ -66,6 +66,11 @@ void receiverThread(Receiver& receiver) {
     }
 }
 
+void test() {
+    cout << "[main] 测试函数" << endl;
+    
+}
+
 int main() {
     try {
         int windowSize = 10;
