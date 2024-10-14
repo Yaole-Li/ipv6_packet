@@ -14,8 +14,11 @@
 #include <cstdio> // for popen and pclose
 #include <sys/types.h>
 #include <sys/socket.h>
-#include <net/if_dl.h>
-#include <net/if_types.h>  // 添加这行来包含 IFT_ETHER 的定义
+//#include <net/if_dl.h>
+//#include <net/if_types.h>  // 添加这行来包含 IFT_ETHER 的定义
+#ifndef IFT_ETHER
+#define IFT_ETHER 0x6
+#endif
 
 // 构造函数：初始化IPv6Packet对象
 IPv6Packet::IPv6Packet(const std::string& destMAC, const std::string& destIPv6, 
@@ -62,6 +65,7 @@ const std::vector<uint8_t>& IPv6Packet::getPacket() const {
     return packet;
 }
 
+/*
 // 获取本地MAC地址
 void IPv6Packet::fetchLocalMAC() {
     std::cout << "[IPv6Packet.cpp] 获取本地MAC地址" << std::endl;
@@ -90,7 +94,36 @@ void IPv6Packet::fetchLocalMAC() {
 
     throw std::runtime_error("无法获取MAC地址");
 }
+*/
+void IPv6Packet::fetchLocalMAC() {
+    std::cout << "[IPv6Packet.cpp] 获取本地MAC地址" << std::endl;
 
+    int fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd == -1) {
+        throw std::runtime_error("无法创建socket");
+    }
+
+    struct ifreq ifr;
+    memset(&ifr, 0, sizeof(ifr));
+    
+    // 假设您使用的是 "eth0" 网卡，请根据您的系统修改网卡名称
+    strncpy(ifr.ifr_name, "ens33", IFNAMSIZ - 1);
+
+    if (ioctl(fd, SIOCGIFHWADDR, &ifr) == -1) {
+        close(fd);
+        throw std::runtime_error("无法获取MAC地址");
+    }
+
+    unsigned char* ptr = (unsigned char*)ifr.ifr_hwaddr.sa_data;
+    char mac[18];
+    snprintf(mac, sizeof(mac), "%02x:%02x:%02x:%02x:%02x:%02x", 
+             ptr[0], ptr[1], ptr[2], ptr[3], ptr[4], ptr[5]);
+
+    srcMAC = mac;
+    std::cout << "[IPv6Packet.cpp] 本地MAC地址: " << srcMAC << std::endl;
+
+    close(fd);
+}
 // 获取本地IPv6地址
 void IPv6Packet::fetchLocalIPv6() {
     std::cout << "[IPv6Packet.cpp] 获取本地IPv6地址" << std::endl;

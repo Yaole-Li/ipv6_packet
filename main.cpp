@@ -85,7 +85,7 @@ int main() {
         int windowSize = 10;
         size_t mtu = 1500;
         int threadCount = 4;
-        string interface = "en0";  // 注意：这可能需要根据您的系统进行调整
+        string interface = "ens33";  // 注意：这可能需要根据您的系统进行调整
 
         // 使用 IPv6Packet 获取本机 MAC 和 IPv6 地址
         IPv6Packet dummyPacket("", "", vector<uint8_t>(), vector<uint8_t>(), false);
