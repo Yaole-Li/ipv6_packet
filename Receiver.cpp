@@ -215,6 +215,7 @@ void Receiver::handlePacket(const std::vector<uint8_t>& packetData) {
     } else {
         ackNumber = reassemblePayload(flowKey, ipv6Packet, ipv6PacketSize);
     }
+    std::cout << "[Receiver.cpp] 接收到的数据偏移量: " << (ipv6Packet - packetData.data()) << "，数据大小: " << ipv6PacketSize << std::endl;
     flowLock.unlock();
 
     // 发送 ACK
