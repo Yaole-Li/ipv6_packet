@@ -186,13 +186,11 @@ private:
     // 添加 FLOW_TIMEOUT 常量
     const std::chrono::minutes FLOW_TIMEOUT{5};  // 5分钟超时
 
-    // 添加一个新的成变量来存储接收到的数据
+    // 添加新的私有成员来存储接收到的数据和数据包计数
     std::vector<std::vector<uint8_t>> receivedData;
-    std::mutex receivedDataMutex;  // 用于保护 receivedData 的互斥锁
-
-    std::atomic<bool> stopRequested;
-
-    std::atomic<size_t> receivedPacketCount;  // 接收到的数据包计数器
+    std::mutex receivedDataMutex;
+    std::atomic<size_t> receivedPacketCount{0};
+    std::atomic<bool> stopRequested{false};
 };
 
 #endif // RECEIVER_H

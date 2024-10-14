@@ -6,6 +6,7 @@
 #include <arpa/inet.h>
 #include <netinet/ip6.h>
 #include <netinet/icmp6.h>
+#include <iomanip>
 
 // 构造函数：初始化 Sender 对象
 Sender::Sender(int windowSize, size_t mtu, const std::string& interface)
@@ -18,7 +19,7 @@ Sender::Sender(int windowSize, size_t mtu, const std::string& interface)
     }
     
     // 计算最大分片大小
-    maxFragmentSize = mtu - 40 - 8;  // IPv6 header (40 bytes) + Fragment header (8 bytes)
+    maxFragmentSize = mtu - 40 - 18;  // IPv6 header (40 bytes) + Fragment header (8 bytes)
 
     // 初始化用于接收 ACK 的 pcap 句柄
     ack_handle = pcap_open_live(interface.c_str(), BUFSIZ, 1, 1000, errbuf);
@@ -26,10 +27,18 @@ Sender::Sender(int windowSize, size_t mtu, const std::string& interface)
         throw std::runtime_error("无法打开网络接口以接收 ACK: " + std::string(errbuf));
     }
 
-    // 设置过滤器，只捕获 ICMPv6 数据包
+    // 设置过滤器，只捕获 IPv6 数据包且协议号为 253 的包
+    std::string filter = "ip6 and ip6[6] == 253";
     struct bpf_program fp;
-    pcap_compile(ack_handle, &fp, "icmp6", 0, PCAP_NETMASK_UNKNOWN);
-    pcap_setfilter(ack_handle, &fp);
+    if (pcap_compile(ack_handle, &fp, filter.c_str(), 0, PCAP_NETMASK_UNKNOWN) == -1) {
+        std::cerr << "无法编译过滤器: " << pcap_geterr(ack_handle) << std::endl;
+        throw std::runtime_error("过滤器编译失败");
+    }
+    if (pcap_setfilter(ack_handle, &fp) == -1) {
+        std::cerr << "无法设置过滤器: " << pcap_geterr(ack_handle) << std::endl;
+        throw std::runtime_error("设置过滤器失败");
+    }
+    pcap_freecode(&fp);
 }
 
 // 析构函数：清理资源
@@ -47,13 +56,36 @@ void Sender::addPacket(const std::string& destMAC, const std::string& destIPv6,
                        const std::vector<uint8_t>& payload, 
                        const std::vector<uint8_t>& extensionHeaderContent,
                        bool fragmentFlag) {
+    std::cout << "---------[addPacket]---------" << std::endl;
+    std::cout << "[Sender.cpp] 添加新数据包到发送队列" << std::endl;
+    
+    // 输出 extensionHeaderContent
+    std::cout << "[Sender.cpp] 扩展头部内容 (大小: " << extensionHeaderContent.size() << " 字节):" << std::endl;
+    // for (size_t i = 0; i < extensionHeaderContent.size(); ++i) {
+    //     std::cout << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(extensionHeaderContent[i]) << " ";
+    //    if ((i + 1) % 16 == 0 || i == extensionHeaderContent.size() - 1) std::cout << std::endl;
+    //}
+    std::cout << std::dec;  // 恢复为十进制输出
+
+    // 输出 payload
+    std::cout << "[Sender.cpp] 负载内容 (大小: " << payload.size() << " 字节):" << std::endl;
+    // for (size_t i = 0; i < payload.size(); ++i) {
+    //     std::cout << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(payload[i]) << " ";
+    //     if ((i + 1) % 16 == 0 || i == payload.size() - 1) std::cout << std::endl;
+    // }
+    std::cout << std::dec;  // 恢复为十进制输出
+
     // 创建新的 IPv6Packet 对象并添加到队列
     auto packet = std::make_shared<IPv6Packet>(destMAC, destIPv6, payload, extensionHeaderContent, fragmentFlag);
     packetQueue.push_back(packet);
+
+    std::cout << "[Sender.cpp] 数据包已添加到发送队列" << std::endl;
+    std::cout << "---------[addPacket End]---------" << std::endl;
 }
 
 // 尝试发送下一个数据包
 bool Sender::sendPacket() {
+    std::cout << "---------[sendPacket]---------" << std::endl;
     std::cout << "[Sender.cpp] 尝试发送数据包，当前序列号: " << nextSequenceNumber << std::endl;
     if (nextSequenceNumber < base + windowSize && !packetQueue.empty()) {
         auto& packet = packetQueue.front();
@@ -75,6 +107,7 @@ bool Sender::sendPacket() {
             updateFlowTable(nextSequenceNumber, true, false);
             nextSequenceNumber++;  // 只有在成功发送后才增加序列号
             packetQueue.erase(packetQueue.begin());
+            std::cout << "---------[sendPacket End]---------" << std::endl;
             return true;
         } else {
             std::cout << "[Sender.cpp] 发送数据包失败，序列号: " << nextSequenceNumber << std::endl;
@@ -82,11 +115,13 @@ bool Sender::sendPacket() {
     } else {
         std::cout << "[Sender.cpp] 没有新的数据包需要发送" << std::endl;
     }
+    std::cout << "---------[sendPacket End]---------" << std::endl;
     return false;
 }
 
 // 处理接收到的 ACK
 void Sender::handleAck(uint32_t ackNumber) {
+    std::cout << "---------[handleAck]---------" << std::endl;
     std::cout << "[Sender.cpp] 处理 ACK，确认号: " << ackNumber << std::endl;
     if (ackNumber >= base) {
         // 更新已确认的数据包状态
@@ -102,10 +137,12 @@ void Sender::handleAck(uint32_t ackNumber) {
     } else {
         std::cout << "[Sender.cpp] 收到重复 ACK，序列号: " << ackNumber << std::endl;
     }
+    std::cout << "---------[handleAck End]---------" << std::endl;
 }
 
 // 检查超时的数据包
 void Sender::checkTimeouts() {
+    std::cout << "---------[checkTimeouts]---------" << std::endl;
     std::cout << "[Sender.cpp] 检查超时数据包" << std::endl;
     auto now = std::chrono::steady_clock::now();
     for (auto& entry : flowTable) {
@@ -118,6 +155,7 @@ void Sender::checkTimeouts() {
             }
         }
     }
+    std::cout << "---------[checkTimeouts End]---------" << std::endl;
 }
 
 // 更新流表
@@ -145,10 +183,14 @@ void Sender::retransmitPacket(uint32_t sequenceNumber) {
 
 // 将数据包分片
 std::vector<std::vector<uint8_t>> Sender::fragmentPacket(const IPv6Packet& packet) {
+    std::cout << "---------[fragmentPacket]---------" << std::endl;
     std::vector<std::vector<uint8_t>> fragments;
     const std::vector<uint8_t>& extensionHeader = packet.getExtensionHeaderContent();
     const std::vector<uint8_t>& payload = packet.getPayload();
     
+    std::cout << "[Sender.cpp] 扩展头部大小: " << extensionHeader.size() << " 字节" << std::endl;
+    std::cout << "[Sender.cpp] 负载大小: " << payload.size() << " 字节" << std::endl;
+
     // 定义各种头部和尾部的大小
     size_t ethernetHeaderSize = 14;  // 以太网帧头大小
     size_t ethernetTrailerSize = 4;  // 以太网帧尾大小 (CRC)
@@ -159,7 +201,11 @@ std::vector<std::vector<uint8_t>> Sender::fragmentPacket(const IPv6Packet& packe
     size_t maxIPv6PacketSize = mtu - ethernetHeaderSize - ethernetTrailerSize;
     
     // 计算可用于分片内容的最大大小
-    size_t maxFragmentSize = maxIPv6PacketSize - ipv6HeaderSize - fragmentHeaderSize;
+    size_t maxFragmentSize = maxIPv6PacketSize - ipv6HeaderSize - fragmentHeaderSize - extensionHeader.size();
+
+    std::cout << "[Sender.cpp] MTU: " << mtu << " 字节" << std::endl;
+    std::cout << "[Sender.cpp] 最大 IPv6 包大小: " << maxIPv6PacketSize << " 字节" << std::endl;
+    std::cout << "[Sender.cpp] 最大分片大小: " << maxFragmentSize << " 字节" << std::endl;
 
     uint32_t identification = generateUniqueIdentification();
 
@@ -168,7 +214,7 @@ std::vector<std::vector<uint8_t>> Sender::fragmentPacket(const IPv6Packet& packe
         if (extensionHeader.size() > maxFragmentSize) {
             // 目的选项报头需要分片
             for (size_t offset = 0; offset < extensionHeader.size(); offset += maxFragmentSize) {
-                size_t fragmentSize = std::min(maxFragmentSize, extensionHeader.size() - offset);
+                size_t fragmentSize = std::min<size_t>(maxFragmentSize, extensionHeader.size() - offset);
                 std::vector<uint8_t> fragment(extensionHeader.begin() + offset, extensionHeader.begin() + offset + fragmentSize);
                 
                 IPv6Packet fragmentPacket(packet.getDestMAC(), packet.getDestIPv6(), 
@@ -189,21 +235,19 @@ std::vector<std::vector<uint8_t>> Sender::fragmentPacket(const IPv6Packet& packe
         }
     } else {
         // 有负载
-        size_t totalSize = extensionHeader.size() + payload.size();
-        if (totalSize > maxFragmentSize) {
+        std::cout << "[Sender.cpp] 有负载" << std::endl;
+        if (payload.size() > maxFragmentSize) {
             // 需要分片
-            std::vector<uint8_t> combinedData;
-            combinedData.insert(combinedData.end(), extensionHeader.begin(), extensionHeader.end());
-            combinedData.insert(combinedData.end(), payload.begin(), payload.end());
-
-            for (size_t offset = 0; offset < totalSize; offset += maxFragmentSize) {
-                size_t fragmentSize = std::min(maxFragmentSize, totalSize - offset);
-                std::vector<uint8_t> fragment(combinedData.begin() + offset, combinedData.begin() + offset + fragmentSize);
+            for (size_t offset = 0; offset < payload.size(); offset += maxFragmentSize) {
+                // 计算分片大小
+                size_t fragmentSize = std::min<size_t>(maxFragmentSize, payload.size() - offset);
+                std::vector<uint8_t> fragmentPayload(payload.begin() + offset, payload.begin() + offset + fragmentSize);
                 
+                bool moreFragments = (offset + fragmentSize < payload.size());
                 IPv6Packet fragmentPacket(packet.getDestMAC(), packet.getDestIPv6(), 
-                                          std::vector<uint8_t>(), fragment, true, 
+                                          fragmentPayload, extensionHeader, true, 
                                           offset / 8, 
-                                          offset + fragmentSize < totalSize, 
+                                          moreFragments, 
                                           identification);
                 fragmentPacket.constructPacket();
                 fragments.push_back(fragmentPacket.getPacket());
@@ -218,11 +262,14 @@ std::vector<std::vector<uint8_t>> Sender::fragmentPacket(const IPv6Packet& packe
         }
     }
 
+    std::cout << "[Sender.cpp] 生成的分片数量: " << fragments.size() << std::endl;
+    std::cout << "---------[fragmentPacket End]---------" << std::endl;
     return fragments;
 }
 
 // 发送单个分片
 bool Sender::sendFragment(const std::vector<uint8_t>& fragmentPacket, uint32_t sequenceNumber, uint16_t fragmentOffset, bool moreFragments) {
+    std::cout << "---------[sendFragment]---------" << std::endl;
     (void)moreFragments;  // 避免使用参数的警告
     
     // 添加以太网帧头和尾
@@ -231,27 +278,30 @@ bool Sender::sendFragment(const std::vector<uint8_t>& fragmentPacket, uint32_t s
     // 使用 libpcap 发送数据包
     if (pcap_sendpacket(handle, ethernetFrame.data(), ethernetFrame.size()) != 0) {
         std::cerr << "发送数据包失败: " << pcap_geterr(handle) << std::endl;
+        std::cout << "---------[sendFragment End]---------" << std::endl;
         return false;
     }
     
     std::cout << "[Sender.cpp] 发送分片，序列号: " << sequenceNumber << ", 偏移: " << fragmentOffset 
               << ", 大小: " << ethernetFrame.size() << " 字节" << std::endl;
+    std::cout << "---------[sendFragment End]---------" << std::endl;
     return true;
 }
 
 // 将数据包添加以太网帧头和帧尾
 std::vector<uint8_t> Sender::addEthernetFrame(const std::vector<uint8_t>& ipv6Packet) {
+    std::cout << "---------[addEthernetFrame]---------" << std::endl;
     std::vector<uint8_t> ethernetFrame;
     
     // 添加以太网帧头（14字节）
     struct ether_header header;
     // 解析目标 MAC 地址
-    std::string destMAC = "00:11:22:33:44:55";  // 这里需要替换为实际的目标 MAC 地址
+    std::string destMAC = "32:0b:56:af:a6:cf";  // 这里需要替换为实际的目标 MAC 地址
     sscanf(destMAC.c_str(), "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx", 
            &header.ether_dhost[0], &header.ether_dhost[1], &header.ether_dhost[2],
            &header.ether_dhost[3], &header.ether_dhost[4], &header.ether_dhost[5]);
     // 解析源 MAC 地址
-    std::string srcMAC = "AA:BB:CC:DD:EE:FF";  // 这里需要替换为实源 MAC 地址
+    std::string srcMAC = "32:0b:56:af:a6:cf";  // 这里需要替换为实源 MAC 地址
     sscanf(srcMAC.c_str(), "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx", 
            &header.ether_shost[0], &header.ether_shost[1], &header.ether_shost[2],
            &header.ether_shost[3], &header.ether_shost[4], &header.ether_shost[5]);
@@ -272,11 +322,13 @@ std::vector<uint8_t> Sender::addEthernetFrame(const std::vector<uint8_t>& ipv6Pa
     ethernetFrame.push_back((crc >> 8) & 0xFF);
     ethernetFrame.push_back(crc & 0xFF);
     
+    std::cout << "---------[addEthernetFrame End]---------" << std::endl;
     return ethernetFrame;
 }
 
 // CRC32 计算
 uint32_t Sender::calculateCRC(const std::vector<uint8_t>& data) {
+    std::cout << "---------[calculateCRC]---------" << std::endl;
     uint32_t crc = 0xFFFFFFFF;
     for (uint8_t byte : data) {
         crc ^= byte;
@@ -284,6 +336,7 @@ uint32_t Sender::calculateCRC(const std::vector<uint8_t>& data) {
             crc = (crc >> 1) ^ (0xEDB88320 & -(crc & 1));
         }
     }
+    std::cout << "---------[calculateCRC End]---------" << std::endl;
     return ~crc;
 }
 
@@ -293,6 +346,7 @@ uint32_t Sender::generateUniqueIdentification() {
 }
 
 void Sender::receiveAck() {
+    std::cout << "---------[receiveAck]---------" << std::endl;
     struct pcap_pkthdr* header;
     const u_char* packet;
     int res = pcap_next_ex(ack_handle, &header, &packet);
@@ -310,9 +364,11 @@ void Sender::receiveAck() {
     } else {
         std::cout << "[Sender.cpp] 接收 ACK 时发生错误: " << pcap_geterr(ack_handle) << std::endl;
     }
+    std::cout << "---------[receiveAck End]---------" << std::endl;
 }
 
 uint32_t Sender::processAckPacket(const uint8_t* packet, int size) {
+    std::cout << "---------[processAckPacket]---------" << std::endl;
     std::cout << "[Sender.cpp] 开始处理潜在的 ACK 数据包" << std::endl;
     
     // 跳过以太网头部
@@ -321,6 +377,7 @@ uint32_t Sender::processAckPacket(const uint8_t* packet, int size) {
 
     if (ipv6_size < static_cast<int>(sizeof(struct ip6_hdr) + 12)) {
         std::cout << "[Sender.cpp] 数据包太小，不是有效的 ACK 包" << std::endl;
+        std::cout << "---------[processAckPacket End]---------" << std::endl;
         return 0;
     }
 
@@ -340,10 +397,12 @@ uint32_t Sender::processAckPacket(const uint8_t* packet, int size) {
                   << ", 源端口: " << src_port
                   << ", 目标端口: " << dst_port << std::endl;
 
+        std::cout << "---------[processAckPacket End]---------" << std::endl;
         return ack_number;
     }
 
     std::cout << "[Sender.cpp] 不是预期的 ACK 包" << std::endl;
+    std::cout << "---------[processAckPacket End]---------" << std::endl;
     return 0;
 }
 
@@ -411,3 +470,12 @@ Sender 类流程图：
 
 注：流程可能会根据实际情况循环或跳转
 */
+
+void printPacketDetails(const std::vector<uint8_t>& packet) {
+    std::cout << "数据包内容 (十六进制):" << std::endl;
+    for (size_t i = 0; i < packet.size(); ++i) {
+        std::cout << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(packet[i]) << " ";
+        if ((i + 1) % 16 == 0) std::cout << std::endl;
+    }
+    std::cout << std::dec << std::endl;
+}

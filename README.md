@@ -98,8 +98,17 @@
 - 在实际部署时，需要考虑网络安全性，如数据加密和身份验证。
 
 ## 未来改进
-
 - 实现更复杂的拥塞控制算法。
 - 添加 QoS (Quality of Service) 支持。
 - 优化多线程处理以提高性能。
 - 增加更多的错误处理和异常情况的处理。
+
+## 编译说明
+- 编译命令：
+```
+g++ -std=c++17 -Wall -Wextra -pedantic -g \
+    main.cpp IPv6Packet.cpp Sender.cpp Receiver.cpp \
+    -I. \
+    -lpcap -lpthread \
+    -o bin/IPv6ProtocolStack
+```
