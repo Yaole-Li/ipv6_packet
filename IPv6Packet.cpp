@@ -14,11 +14,18 @@
 #include <cstdio> // for popen and pclose
 #include <sys/types.h>
 #include <sys/socket.h>
+<<<<<<< HEAD
 //#include <net/if_dl.h>
 //#include <net/if_types.h>  // 添加这行来包含 IFT_ETHER 的定义
 #ifndef IFT_ETHER
 #define IFT_ETHER 0x6
 #endif
+=======
+#include <net/if.h>
+#include <net/ethernet.h>  // 添加这行来包含 IFT_ETHER 的定义
+#include <linux/if_packet.h>
+#include <linux/if_arp.h>
+>>>>>>> 841d18ae8549e493085682db8c657d9b248f0b45
 
 // 构造函数：初始化IPv6Packet对象
 IPv6Packet::IPv6Packet(const std::string& destMAC, const std::string& destIPv6, 
@@ -75,13 +82,13 @@ void IPv6Packet::fetchLocalMAC() {
 
     if (getifaddrs(&ifap) == 0) {
         for (ifaptr = ifap; ifaptr != nullptr; ifaptr = ifaptr->ifa_next) {
-            if (ifaptr->ifa_addr->sa_family == AF_LINK) {
-                struct sockaddr_dl *sdl = (struct sockaddr_dl *)ifaptr->ifa_addr;
-                if (sdl->sdl_type == IFT_ETHER) {
-                    ptr = (unsigned char *)LLADDR(sdl);
+            if (ifaptr->ifa_addr->sa_family == AF_PACKET) {
+                struct sockaddr_ll *sll = (struct sockaddr_ll *)ifaptr->ifa_addr;
+                if (sll->sll_hatype == ARPHRD_ETHER) {
+                    unsigned char *ptr = (unsigned char *)sll->sll_addr;
                     char mac[18];
-                    snprintf(mac, sizeof(mac), "%02x:%02x:%02x:%02x:%02x:%02x", 
-                             ptr[0], ptr[1], ptr[2], ptr[3], ptr[4], ptr[5]);
+                    snprintf(mac, sizeof(mac), "%02x:%02x:%02x:%02x:%02x:%02x",
+                            ptr[0], ptr[1], ptr[2], ptr[3], ptr[4], ptr[5]);
                     srcMAC = mac;
                     std::cout << "[IPv6Packet.cpp] 本地MAC地址: " << srcMAC << std::endl;
                     freeifaddrs(ifap);
@@ -91,6 +98,7 @@ void IPv6Packet::fetchLocalMAC() {
         }
         freeifaddrs(ifap);
     }
+
 
     throw std::runtime_error("无法获取MAC地址");
 }
