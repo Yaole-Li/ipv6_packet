@@ -14,18 +14,10 @@
 #include <cstdio> // for popen and pclose
 #include <sys/types.h>
 #include <sys/socket.h>
-<<<<<<< HEAD
-//#include <net/if_dl.h>
-//#include <net/if_types.h>  // 添加这行来包含 IFT_ETHER 的定义
-#ifndef IFT_ETHER
-#define IFT_ETHER 0x6
-#endif
-=======
 #include <net/if.h>
 #include <net/ethernet.h>  // 添加这行来包含 IFT_ETHER 的定义
 #include <linux/if_packet.h>
 #include <linux/if_arp.h>
->>>>>>> 841d18ae8549e493085682db8c657d9b248f0b45
 
 // 构造函数：初始化IPv6Packet对象
 IPv6Packet::IPv6Packet(const std::string& destMAC, const std::string& destIPv6, 
