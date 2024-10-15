@@ -104,8 +104,32 @@
 - 增加更多的错误处理和异常情况的处理。
 
 ## 编译说明
-- 编译命令：
-```
+
+### 使用 CMake
+
+1. 创建构建目录：
+   ```bash
+   mkdir build
+   cd build
+   ```
+
+2. 生成构建文件：
+   ```bash
+   cmake ..
+   ```
+
+3. 编译项目：
+   ```bash
+   make
+   ```
+
+可执行文件将会在 `bin` 目录下生成。
+
+### 使用 G++ 直接编译
+
+如果你更喜欢直接使用 G++，可以使用以下命令：
+
+```bash
 g++ -std=c++17 -Wall -Wextra -pedantic -g \
     main.cpp IPv6Packet.cpp Sender.cpp Receiver.cpp \
     -I. \

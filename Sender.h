@@ -102,13 +102,13 @@ private:
     // 生成唯一的标识符
     uint32_t generateUniqueIdentification();
 
-    size_t maxFragmentSize;  // 最大分片大小
-
     // 用于接收 ACK 的 pcap 句柄
     pcap_t* ack_handle;
 
     // 处理接收到的 ACK 数据包
     uint32_t processAckPacket(const uint8_t* packet, int size);
+
+    size_t maxFragmentPayloadSize;  // 新增成员变量
 };
 
 #endif // SENDER_H

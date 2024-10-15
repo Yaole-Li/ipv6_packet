@@ -18,9 +18,6 @@ Sender::Sender(int windowSize, size_t mtu, const std::string& interface)
         throw std::runtime_error("无法打开网络接口: " + std::string(errbuf));
     }
     
-    // 计算最大分片大小
-    maxFragmentSize = mtu - 40-8-2;  // 40B的ipv6基本头，8扩展，2基本
-
     // 初始化用于接收 ACK 的 pcap 句柄
     ack_handle = pcap_open_live(interface.c_str(), BUFSIZ, 1, 1000, errbuf);
     if (ack_handle == nullptr) {
@@ -93,11 +90,19 @@ bool Sender::sendPacket() {
         std::vector<std::vector<uint8_t>> fragments = fragmentPacket(*packet);
         bool allSent = true;
         // 发送所有分片
-        for (size_t i = 0; i < fragments.size(); ++i) {
-            bool moreFragments = (i < fragments.size() - 1);
-            // uint16_t fragmentOffset = i * (mtu - 40 - 8) / 8;  // 计算分片偏移
-            uint16_t fragmentOffset = i * maxFragmentSize / 8;  // 计算分片偏移
-            if (!sendFragment(fragments[i], nextSequenceNumber, fragmentOffset, moreFragments)) {
+        for (const auto& fragment : fragments) {
+            // 直接从分片头部读取偏移量
+            uint16_t fragmentOffset = 0;
+            bool moreFragments = false;
+            if (fragment.size() >= sizeof(struct ip6_hdr) + sizeof(struct ip6_frag)) {
+                const struct ip6_hdr* ip6Header = reinterpret_cast<const struct ip6_hdr*>(fragment.data());
+                if (ip6Header->ip6_nxt == IPPROTO_FRAGMENT) {
+                    const struct ip6_frag* fragHeader = reinterpret_cast<const struct ip6_frag*>(fragment.data() + sizeof(struct ip6_hdr));
+                    fragmentOffset = ntohs(fragHeader->ip6f_offlg & IP6F_OFF_MASK) / 8; //这里除以八才是偏移量，因为偏移量以8字节为单位
+                    moreFragments = (fragHeader->ip6f_offlg & IP6F_MORE_FRAG) != 0;
+                }
+            }
+            if (!sendFragment(fragment, nextSequenceNumber, fragmentOffset, moreFragments)) {
                 allSent = false;
                 break;
             }
@@ -165,15 +170,21 @@ void Sender::updateFlowTable(uint32_t sequenceNumber, bool sent, bool acknowledg
 
 // 重新发送数据包
 void Sender::retransmitPacket(uint32_t sequenceNumber) {
-    std::cout << "[Sender.cpp] 重新发送数据包，序列号: " << sequenceNumber << std::endl;
+    std::cout << "[Sender.cpp] 重新发送数据包列号: " << sequenceNumber << std::endl;
     if (flowTable.find(sequenceNumber) != flowTable.end()) {
         auto& packetStatus = flowTable[sequenceNumber];
         // 重新分片并发送
         std::vector<std::vector<uint8_t>> fragments = fragmentPacket(*(packetStatus.packet));
         for (size_t i = 0; i < fragments.size(); ++i) {
             bool moreFragments = (i < fragments.size() - 1);
-            // uint16_t fragmentOffset = i * (mtu - 40 - 8) / 8;
-            uint16_t fragmentOffset = i * maxFragmentSize / 8;  // 计算分片偏移
+            // 计算分偏移时使用与 fragmentPacket 中相同的逻辑
+            size_t ethernetHeaderSize = 14;
+            size_t ethernetTrailerSize = 4;
+            size_t ipv6HeaderSize = 40;
+            size_t fragmentHeaderSize = 8;
+            size_t extensionHeaderSize = packetStatus.packet->getExtensionHeaderContent().size();
+            size_t maxFragmentPayloadSize = mtu - ethernetHeaderSize - ethernetTrailerSize - ipv6HeaderSize - fragmentHeaderSize - extensionHeaderSize;
+            uint16_t fragmentOffset = i * maxFragmentPayloadSize / 8;
             sendFragment(fragments[i], sequenceNumber, fragmentOffset, moreFragments);
         }
         packetStatus.sent = true;
@@ -198,54 +209,29 @@ std::vector<std::vector<uint8_t>> Sender::fragmentPacket(const IPv6Packet& packe
     size_t fragmentHeaderSize = 8;   // 分片头部大小
     
     // 计算可用于 IPv6 包内容的最大大小
-    size_t maxIPv6PacketSize = mtu - ipv6HeaderSize;
+    size_t maxIPv6PacketSize = mtu - ethernetHeaderSize - ethernetTrailerSize;
     
     // 计算可用于分片内容的最大大小
-    size_t maxFragmentSize = maxIPv6PacketSize - fragmentHeaderSize - extensionHeader.size();
+    maxFragmentPayloadSize = maxIPv6PacketSize - ipv6HeaderSize - fragmentHeaderSize;
 
     std::cout << "[Sender.cpp] MTU: " << mtu << " 字节" << std::endl;
     std::cout << "[Sender.cpp] 最大 IPv6 包大小: " << maxIPv6PacketSize << " 字节" << std::endl;
-    std::cout << "[Sender.cpp] 最大分片大小: " << maxFragmentSize << " 字节" << std::endl;
+    std::cout << "[Sender.cpp] 最大分片负载大小: " << maxFragmentPayloadSize << " 字节" << std::endl;
 
     uint32_t identification = generateUniqueIdentification();
 
     if (payload.empty()) {
-        // 没有负载，只有目的选项报头
-        if (extensionHeader.size() > maxFragmentSize) {
-            // 目的选项报头需要分片
-            for (size_t offset = 0; offset < extensionHeader.size(); offset += maxFragmentSize) {
-                size_t fragmentSize = std::min<size_t>(maxFragmentSize, extensionHeader.size() - offset);
+        // 没有有效负载，只有扩展头部（目的选项报头）
+        std::cout << "[Sender.cpp] 没有有效负载，只处理扩展头部" << std::endl;
+        if (extensionHeader.size() > maxFragmentPayloadSize) {
+            // 需要对扩展头部进行分片
+            for (size_t offset = 0; offset < extensionHeader.size(); offset += maxFragmentPayloadSize) {
+                size_t fragmentSize = std::min(maxFragmentPayloadSize, extensionHeader.size() - offset);
                 std::vector<uint8_t> fragment(extensionHeader.begin() + offset, extensionHeader.begin() + offset + fragmentSize);
                 
+                bool moreFragments = (offset + fragmentSize < extensionHeader.size());
                 IPv6Packet fragmentPacket(packet.getDestMAC(), packet.getDestIPv6(), 
                                           std::vector<uint8_t>(), fragment, true, 
-                                          offset / 8, 
-                                          offset + fragmentSize < extensionHeader.size(), 
-                                          identification);
-                fragmentPacket.constructPacket();
-                fragments.push_back(fragmentPacket.getPacket());
-            }
-        } else {
-            // 目的选项报头不需要分片
-            IPv6Packet fragmentPacket(packet.getDestMAC(), packet.getDestIPv6(), 
-                                      std::vector<uint8_t>(), extensionHeader, false, 
-                                      0, false, identification);
-            fragmentPacket.constructPacket();
-            fragments.push_back(fragmentPacket.getPacket());
-        }
-    } else {
-        // 有负载
-        std::cout << "[Sender.cpp] 有负载" << std::endl;
-        if (payload.size() > maxFragmentSize) {
-            // 需要分片
-            for (size_t offset = 0; offset < payload.size(); offset += maxFragmentSize) {
-                // 计算分片大小
-                size_t fragmentSize = std::min<size_t>(maxFragmentSize, payload.size() - offset);
-                std::vector<uint8_t> fragmentPayload(payload.begin() + offset, payload.begin() + offset + fragmentSize);
-                
-                bool moreFragments = (offset + fragmentSize < payload.size());
-                IPv6Packet fragmentPacket(packet.getDestMAC(), packet.getDestIPv6(), 
-                                          fragmentPayload, extensionHeader, true, 
                                           offset / 8, 
                                           moreFragments, 
                                           identification);
@@ -253,7 +239,45 @@ std::vector<std::vector<uint8_t>> Sender::fragmentPacket(const IPv6Packet& packe
                 fragments.push_back(fragmentPacket.getPacket());
             }
         } else {
-            // 不需要分片
+            // 扩展头部不需要分片
+            IPv6Packet fragmentPacket(packet.getDestMAC(), packet.getDestIPv6(), 
+                                      std::vector<uint8_t>(), extensionHeader, false, 
+                                      0, false, identification);
+            fragmentPacket.constructPacket();
+            fragments.push_back(fragmentPacket.getPacket());
+        }
+    } else {
+        // 有有效负载
+        std::cout << "[Sender.cpp] 有有效负载，处理有效负载分片" << std::endl;
+        
+        // 计算目的选项报头的总大小
+        size_t destinationOptionsHeaderSize = 2 + 2; // 基本大小：2字节的头部 + 至少2字节的选项和填充
+        if (!extensionHeader.empty()) {
+            destinationOptionsHeaderSize += ((extensionHeader.size() + 7) / 8) * 8; // 向上取整到8的倍数
+        }
+        
+        size_t maxPayloadPerFragment = maxFragmentPayloadSize - destinationOptionsHeaderSize;
+        
+        if (payload.size() > maxPayloadPerFragment) {
+            // 需要有效负载进行分片
+            for (size_t offset = 0; offset < payload.size(); offset += maxPayloadPerFragment) {
+                size_t fragmentSize = std::min(maxPayloadPerFragment, payload.size() - offset);
+                std::vector<uint8_t> fragmentPayload(payload.begin() + offset, payload.begin() + offset + fragmentSize);
+                
+                bool moreFragments = (offset + fragmentSize < payload.size());
+                uint16_t fragmentOffsetIn8ByteUnits = offset / 8;  // 转换为 8 字节单位
+                std::cout << "[Sender.cpp] 分片偏移量 (8字节单位): " << fragmentOffsetIn8ByteUnits << std::endl;
+                
+                IPv6Packet fragmentPacket(packet.getDestMAC(), packet.getDestIPv6(), 
+                                          fragmentPayload, extensionHeader, true, 
+                                          fragmentOffsetIn8ByteUnits, 
+                                          moreFragments, 
+                                          identification);
+                fragmentPacket.constructPacket();
+                fragments.push_back(fragmentPacket.getPacket());
+            }
+        } else {
+            // 有效负载不需要分片
             IPv6Packet fragmentPacket(packet.getDestMAC(), packet.getDestIPv6(), 
                                       payload, extensionHeader, false, 
                                       0, false, identification);
@@ -407,7 +431,7 @@ uint32_t Sender::processAckPacket(const uint8_t* packet, int size) {
 }
 
 /*
-Sender 类流程图：
+Sender 类流图：
 
 +-------------------+
 |     初始化        |
@@ -440,7 +464,7 @@ Sender 类流程图：
           |
           v
 +-------------------+
-|  添加以太网帧     |
+|  添加以���网帧     |
 |(addEthernetFrame) |
 +-------------------+
           |
