@@ -19,7 +19,7 @@ Sender::Sender(int windowSize, size_t mtu, const std::string& interface)
     }
     
     // 计算最大分片大小
-    maxFragmentSize = mtu - 40 - 18;  // IPv6 header (40 bytes) + Fragment header (8 bytes)
+    maxFragmentSize = mtu - 40-8-2;  // 40B的ipv6基本头，8扩展，2基本
 
     // 初始化用于接收 ACK 的 pcap 句柄
     ack_handle = pcap_open_live(interface.c_str(), BUFSIZ, 1, 1000, errbuf);
@@ -128,7 +128,7 @@ void Sender::handleAck(uint32_t ackNumber) {
         for (uint32_t i = base; i <= ackNumber; i++) {
             if (flowTable.find(i) != flowTable.end()) {
                 flowTable[i].acknowledged = true;
-                std::cout << "[Sender.cpp] 数据包 " << i << " 已被确认" << std::endl;
+                std::cout << "[Sender.cpp] 数据包 " << i << " 发送确认" << std::endl;
             }
         }
         // 移动滑动窗口
@@ -198,10 +198,10 @@ std::vector<std::vector<uint8_t>> Sender::fragmentPacket(const IPv6Packet& packe
     size_t fragmentHeaderSize = 8;   // 分片头部大小
     
     // 计算可用于 IPv6 包内容的最大大小
-    size_t maxIPv6PacketSize = mtu - ethernetHeaderSize - ethernetTrailerSize;
+    size_t maxIPv6PacketSize = mtu - ipv6HeaderSize;
     
     // 计算可用于分片内容的最大大小
-    size_t maxFragmentSize = maxIPv6PacketSize - ipv6HeaderSize - fragmentHeaderSize - extensionHeader.size();
+    size_t maxFragmentSize = maxIPv6PacketSize - fragmentHeaderSize - extensionHeader.size();
 
     std::cout << "[Sender.cpp] MTU: " << mtu << " 字节" << std::endl;
     std::cout << "[Sender.cpp] 最大 IPv6 包大小: " << maxIPv6PacketSize << " 字节" << std::endl;

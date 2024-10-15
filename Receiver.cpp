@@ -527,15 +527,34 @@ void Receiver::sendAck(const FlowKey& flowKey, uint32_t ackNumber) {
     inet_pton(AF_INET6, flowKey.srcIP.c_str(), &ipv6Header.ip6_dst);
 
     // 构造 ACK 负载
+    // std::vector<uint8_t> ackPayload;
+    // uint32_t networkAckNumber = htonl(ackNumber);
+    // ackPayload.insert(ackPayload.end(), reinterpret_cast<uint8_t*>(&networkAckNumber), reinterpret_cast<uint8_t*>(&networkAckNumber) + 4);
+    // uint32_t originalPacketId = htonl(flowKey.identification);
+    // ackPayload.insert(ackPayload.end(), reinterpret_cast<uint8_t*>(&originalPacketId), reinterpret_cast<uint8_t*>(&originalPacketId) + 4);
+    // uint16_t srcPort = htons(flowKey.srcPort);
+    // ackPayload.insert(ackPayload.end(), reinterpret_cast<uint8_t*>(&srcPort), reinterpret_cast<uint8_t*>(&srcPort) + 2);
+    // uint16_t dstPort = htons(flowKey.destPort);
+    // ackPayload.insert(ackPayload.end(), reinterpret_cast<uint8_t*>(&dstPort), reinterpret_cast<uint8_t*>(&dstPort) + 2);
+
+    // 构造 ACK 负载
     std::vector<uint8_t> ackPayload;
+
     uint32_t networkAckNumber = htonl(ackNumber);
-    ackPayload.insert(ackPayload.end(), reinterpret_cast<uint8_t*>(&networkAckNumber), reinterpret_cast<uint8_t*>(&networkAckNumber) + 4);
+    ackPayload.resize(ackPayload.size() + sizeof(networkAckNumber));
+    memcpy(&ackPayload[ackPayload.size() - sizeof(networkAckNumber)], &networkAckNumber, sizeof(networkAckNumber));
+
     uint32_t originalPacketId = htonl(flowKey.identification);
-    ackPayload.insert(ackPayload.end(), reinterpret_cast<uint8_t*>(&originalPacketId), reinterpret_cast<uint8_t*>(&originalPacketId) + 4);
+    ackPayload.resize(ackPayload.size() + sizeof(originalPacketId));
+    memcpy(&ackPayload[ackPayload.size() - sizeof(originalPacketId)], &originalPacketId, sizeof(originalPacketId));
+
     uint16_t srcPort = htons(flowKey.srcPort);
-    ackPayload.insert(ackPayload.end(), reinterpret_cast<uint8_t*>(&srcPort), reinterpret_cast<uint8_t*>(&srcPort) + 2);
+    ackPayload.resize(ackPayload.size() + sizeof(srcPort));
+    memcpy(&ackPayload[ackPayload.size() - sizeof(srcPort)], &srcPort, sizeof(srcPort));
+
     uint16_t dstPort = htons(flowKey.destPort);
-    ackPayload.insert(ackPayload.end(), reinterpret_cast<uint8_t*>(&dstPort), reinterpret_cast<uint8_t*>(&dstPort) + 2);
+    ackPayload.resize(ackPayload.size() + sizeof(dstPort));
+    memcpy(&ackPayload[ackPayload.size() - sizeof(dstPort)], &dstPort, sizeof(dstPort));
 
     // 构造完整的数据包
     std::vector<uint8_t> packet;
