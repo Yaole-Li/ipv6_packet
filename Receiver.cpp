@@ -8,17 +8,27 @@
 #include "IPv6Packet.h"
 #include <netinet/icmp6.h>
 #include <iomanip>
+#include <pcap/pcap.h>
 
 // 构造函数：初始化接收器
 Receiver::Receiver(int windowSize, size_t mtu, const std::string& interface, int threadCount)
     : windowSize(windowSize), mtu(mtu), interface(interface), threadCount(threadCount), 
-      running(true), stopRequested(false), receivedPacketCount(0) {
+      running(true), receivedPacketCount(0), stopRequested(false) {
     // 初始化 libpcap，用于接收数据包
     char errbuf[PCAP_ERRBUF_SIZE];
     handle = pcap_open_live(interface.c_str(), BUFSIZ, 1, 1000, errbuf);
     if (handle == nullptr) {
         throw std::runtime_error("无法打开网络接口: " + std::string(errbuf));
     }
+
+    // 检查是否可以在此接口上发送数据包
+    if (pcap_datalink(handle) == DLT_NULL) {
+        std::cerr << "警告: 此接口可能不支持发送数据包" << std::endl;
+    }
+
+    // 尝试获取接口标志
+    int dlt = pcap_datalink(handle);
+    std::cout << "数据链路类型: " << pcap_datalink_val_to_name(dlt) << std::endl;
 
     // 初始化工作线程相关的数据结构
     packetQueues.resize(threadCount);
@@ -144,7 +154,7 @@ void Receiver::packetHandler(u_char* userData, const struct pcap_pkthdr* pkthdr,
     }
     
     std::vector<uint8_t> packetData(packet, packet + pkthdr->len);
-    
+
     // 提取流标识并计算哈希值，决定用哪个工作队列
     FlowKey flowKey = extractFlowKey(packetData);
     size_t queueIndex = std::hash<FlowKey>{}(flowKey) % threadCount;
@@ -180,6 +190,7 @@ void Receiver::workerThread(int threadId) {
 
 // 处理单个数据包
 void Receiver::handlePacket(const std::vector<uint8_t>& packetData) {
+    std::cout << "---------[handlePacket]---------" << std::endl;
     std::cout << "[Receiver.cpp] 处理数据包，大小: " << packetData.size() << " 字节" << std::endl;
     
     // 跳过以太网头部（通常是14字节）
@@ -223,6 +234,7 @@ void Receiver::handlePacket(const std::vector<uint8_t>& packetData) {
         std::cout << "[Receiver.cpp] 准备发送 ACK，确认号: " << ackNumber << std::endl;
         sendAck(flowKey, ackNumber);
     }
+    std::cout << "---------[handlePacket End]---------" << std::endl;
 }
 
 // 更新 extractFlowKey 方法
@@ -255,16 +267,20 @@ FlowKey Receiver::extractFlowKey(const std::vector<uint8_t>& packetData) {
 
 // 检查 IPv6 头部是否完整
 bool Receiver::checkIPv6Header(const uint8_t* packet, int packetSize) {
+    std::cout << "---------[checkIPv6Header]---------" << std::endl;
     (void)packet;  // 避免未使用参数的警告
     if (static_cast<size_t>(packetSize) < sizeof(struct ip6_hdr)) {
         return false;
     }
     // 可以添加更多的头部检查逻辑
+    std::cout << "---------[checkIPv6Header End]---------" << std::endl;
     return true;
 }
 
 // 检查是否有有效载荷
 bool Receiver::checkPayload(const uint8_t* packet, int packetSize) {
+    std::cout << "---------[checkPayload]---------" << std::endl;
+    (void)packetSize;  // 避免未使用参数的警告
     struct ip6_hdr* ip6Header = (struct ip6_hdr*)packet;
     uint16_t payloadLen = ntohs(ip6Header->ip6_plen);
     
@@ -280,13 +296,16 @@ bool Receiver::checkPayload(const uint8_t* packet, int packetSize) {
         if (nextHeader == IPPROTO_FRAGMENT) {
             struct ip6_frag* fragHeader = (struct ip6_frag*)currentHeader;
             headerSize += sizeof(struct ip6_frag);
+            // std::cout << "[Receiver.cpp] 加上分片头部的头部大小: " << headerSize << " 字节" << std::endl;
             nextHeader = fragHeader->ip6f_nxt;
             currentHeader += sizeof(struct ip6_frag);
             std::cout << "[Receiver.cpp] 发现分片头部，大小: " << sizeof(struct ip6_frag) << " 字节" << std::endl;
         } else if (nextHeader == IPPROTO_DSTOPTS) {
             struct ip6_dest* dstopt = (struct ip6_dest*)currentHeader;
+            // std::cout << "[Receiver.cpp] dstopt->ip6d_len大小: " << int(dstopt->ip6d_len) << " 字节" << std::endl;
             int optLen = (dstopt->ip6d_len) * 8 + 2;  // 正确计算目的选项头部的大小
             headerSize += optLen;
+            // std::cout << "[Receiver.cpp] 加上目的选项的头部大小: " << headerSize << " 字节" << std::endl;
             nextHeader = dstopt->ip6d_nxt;
             currentHeader += optLen;
             std::cout << "[Receiver.cpp] 发现目的选项头部，大小: " << optLen << " 字节" << std::endl;
@@ -306,18 +325,22 @@ bool Receiver::checkPayload(const uint8_t* packet, int packetSize) {
     std::cout << "  是否有有效载荷: " << (hasEffectivePayload ? "是" : "否") << std::endl;
 
     // 打印数据包的十六进制内容
+    /*
     std::cout << "[Receiver.cpp] 数据包内容 (十六进制):" << std::endl;
     for (int i = 0; i < packetSize; ++i) {
         printf("%02X ", packet[i]);
         if ((i + 1) % 16 == 0) printf("\n");
     }
     printf("\n");
-
+    */
+    
+    std::cout << "---------[checkPayload End]---------" << std::endl;
     return hasEffectivePayload;
 }
 
 // 重组扩展头部分（目的选项报头）
 uint32_t Receiver::reassembleExtensionHeader(const FlowKey& flowKey, const uint8_t* packet, int packetSize) {
+    std::cout << "---------[reassembleExtensionHeader]---------" << std::endl;
     std::cout << "[Receiver.cpp] 重组扩展头部，流标识: " << flowKey.srcIP << ":" << flowKey.srcPort << " -> " 
               << flowKey.destIP << ":" << flowKey.destPort << std::endl;
     struct ip6_hdr* ip6Header = (struct ip6_hdr*)packet;
@@ -350,17 +373,19 @@ uint32_t Receiver::reassembleExtensionHeader(const FlowKey& flowKey, const uint8
             case IPPROTO_FRAGMENT:
                 // 处理分片头部
                 ackNumber = handleFragment(flowKey, packet + headerLen, packetSize - headerLen);
-                return ackNumber;  // 分片头部之后就是负载或者下一个扩展头，在这里结束处理
+                return ackNumber;  // 分片头部之后就负载或者下一个扩展头，在这里结束处理
             default:
                 // 未知的头部类型或者已经到达负载部分，停止处理
                 return ackNumber;
         }
     }
+    std::cout << "---------[reassembleExtensionHeader End]---------" << std::endl;
     return ackNumber;
 }
 
 // 重组负载部分
 uint32_t Receiver::reassemblePayload(const FlowKey& flowKey, const uint8_t* packet, int packetSize) {
+    std::cout << "---------[reassemblePayload]---------" << std::endl;
     std::cout << "[Receiver.cpp] 重组有效载荷，流标识: " << flowKey.srcIP << ":" << flowKey.srcPort << " -> " 
               << flowKey.destIP << ":" << flowKey.destPort << std::endl;
     
@@ -402,10 +427,12 @@ uint32_t Receiver::reassemblePayload(const FlowKey& flowKey, const uint8_t* pack
         std::cout << "[Receiver.cpp] 有效载荷大小: " << effectivePayload.size() 
                   << " 字节, 分片偏移: " << fragmentOffset << std::endl;
 
+        std::cout << "---------[reassemblePayload End]---------" << std::endl;
         return updateFlowTable(flowKey, fragmentOffset, effectivePayload);
     }
 
     std::cout << "[Receiver.cpp] 无有效载荷或数据包大小不正确" << std::endl;
+    std::cout << "---------[reassemblePayload End]---------" << std::endl;
     return 0;
 }
 
@@ -476,7 +503,18 @@ std::vector<uint8_t> Receiver::handleReassembledPacket(const FlowKey& flowKey, c
 
 // 发送 ACK
 void Receiver::sendAck(const FlowKey& flowKey, uint32_t ackNumber) {
-    std::cout << "[Receiver.cpp] 发送 ACK: " << ackNumber << " 给 " << flowKey.srcIP << ":" << flowKey.srcPort << std::endl;
+    std::cout << "---------[sendAck]---------" << std::endl;
+    std::cout << "[Receiver.cpp] 准备发送 ACK: " << ackNumber << " 给 " << flowKey.srcIP << ":" << flowKey.srcPort << std::endl;
+
+    // 构造以太网帧头
+    struct ether_header ethHeader;
+    sscanf(flowKey.srcMAC.c_str(), "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx", 
+           &ethHeader.ether_dhost[0], &ethHeader.ether_dhost[1], &ethHeader.ether_dhost[2],
+           &ethHeader.ether_dhost[3], &ethHeader.ether_dhost[4], &ethHeader.ether_dhost[5]);
+    sscanf(dummyPacket->getSrcMAC().c_str(), "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx", 
+           &ethHeader.ether_shost[0], &ethHeader.ether_shost[1], &ethHeader.ether_shost[2],
+           &ethHeader.ether_shost[3], &ethHeader.ether_shost[4], &ethHeader.ether_shost[5]);
+    ethHeader.ether_type = htons(ETHERTYPE_IPV6);
 
     // 构造 IPv6 头部
     struct ip6_hdr ipv6Header;
@@ -484,7 +522,7 @@ void Receiver::sendAck(const FlowKey& flowKey, uint32_t ackNumber) {
     ipv6Header.ip6_flow = htonl((6 << 28));
     ipv6Header.ip6_plen = htons(12);  // ACK 号(4) + 原始包标识符(4) + 源端口(2) + 目标端口(2)
     ipv6Header.ip6_nxt = 253;  // 使用自定义协议号
-    ipv6Header.ip6_hlim = 255;
+    ipv6Header.ip6_hlim = 64;
     inet_pton(AF_INET6, flowKey.destIP.c_str(), &ipv6Header.ip6_src);
     inet_pton(AF_INET6, flowKey.srcIP.c_str(), &ipv6Header.ip6_dst);
 
@@ -499,15 +537,64 @@ void Receiver::sendAck(const FlowKey& flowKey, uint32_t ackNumber) {
     uint16_t dstPort = htons(flowKey.destPort);
     ackPayload.insert(ackPayload.end(), reinterpret_cast<uint8_t*>(&dstPort), reinterpret_cast<uint8_t*>(&dstPort) + 2);
 
-    // 构造完整的 IPv6 数据包
+    // 构造完整的数据包
     std::vector<uint8_t> packet;
+    packet.insert(packet.end(), reinterpret_cast<uint8_t*>(&ethHeader), reinterpret_cast<uint8_t*>(&ethHeader) + sizeof(ethHeader));
     packet.insert(packet.end(), reinterpret_cast<uint8_t*>(&ipv6Header), reinterpret_cast<uint8_t*>(&ipv6Header) + sizeof(ipv6Header));
     packet.insert(packet.end(), ackPayload.begin(), ackPayload.end());
 
-    // 发送数据包
-    if (pcap_sendpacket(handle, packet.data(), packet.size()) != 0) {
-        std::cerr << "发送 ACK 失败: " << pcap_geterr(handle) << std::endl;
+    // 打印详细的 ACK 包内容
+    /*
+    std::cout << "[Receiver.cpp] ACK 包详细内容:" << std::endl;
+    std::cout << "  IPv6 头部:" << std::endl;
+    std::cout << "    版本: " << ((ntohl(ipv6Header.ip6_flow) & 0xF0000000) >> 28) << std::endl;
+    std::cout << "    流量类: " << ((ntohl(ipv6Header.ip6_flow) & 0x0FF00000) >> 20) << std::endl;
+    std::cout << "    流标签: " << (ntohl(ipv6Header.ip6_flow) & 0x000FFFFF) << std::endl;
+    std::cout << "    负载长度: " << ntohs(ipv6Header.ip6_plen) << std::endl;
+    std::cout << "    下一个头部: " << (int)ipv6Header.ip6_nxt << std::endl;
+    std::cout << "    跳数限制: " << (int)ipv6Header.ip6_hlim << std::endl;
+    char srcIP[INET6_ADDRSTRLEN], dstIP[INET6_ADDRSTRLEN];
+    inet_ntop(AF_INET6, &ipv6Header.ip6_src, srcIP, INET6_ADDRSTRLEN);
+    inet_ntop(AF_INET6, &ipv6Header.ip6_dst, dstIP, INET6_ADDRSTRLEN);
+    std::cout << "    源 IP: " << srcIP << std::endl;
+    std::cout << "    目标 IP: " << dstIP << std::endl;
+    
+    std::cout << "  ACK 负载:" << std::endl;
+    std::cout << "    ACK 号: " << ackNumber << std::endl;
+    std::cout << "    原始包 ID: " << flowKey.identification << std::endl;
+    std::cout << "    源端口: " << flowKey.srcPort << std::endl;
+    std::cout << "    目标端口: " << flowKey.destPort << std::endl;
+
+    std::cout << "  完整数据包 (十六进制):" << std::endl;
+    for (size_t i = 0; i < packet.size(); ++i) {
+        std::cout << std::hex << std::setw(2) << std::setfill('0') << (int)packet[i] << " ";
+        if ((i + 1) % 16 == 0) std::cout << std::endl;
     }
+    std::cout << std::dec << std::endl;
+    */
+
+    // 发送数据包
+    int result = pcap_inject(handle, packet.data(), packet.size());
+    if (result == -1) {
+        std::cerr << "[Receiver.cpp] 发送 ACK 失败: " << pcap_geterr(handle) << std::endl;
+        std::cerr << "[Receiver.cpp] 错误代码: " << errno << " (" << strerror(errno) << ")" << std::endl;
+    } else {
+        std::cout << "[Receiver.cpp] ACK 发送成功，确认号: " << ackNumber 
+                  << " 发送给 " << flowKey.srcIP << ":" << flowKey.srcPort 
+                  << "，大小: " << result << " 字节" << std::endl;
+    }
+
+    // 检查 pcap 句柄状态
+    struct pcap_stat stats;
+    int status = pcap_stats(handle, &stats);
+    if (status == 0) {
+        std::cout << "[Receiver.cpp] pcap 统计: 接收 " << stats.ps_recv 
+                  << ", 丢弃 " << stats.ps_drop 
+                  << ", 接口丢弃 " << stats.ps_ifdrop << std::endl;
+    } else {
+        std::cerr << "[Receiver.cpp] 无法获取 pcap 统计: " << pcap_geterr(handle) << std::endl;
+    }
+    std::cout << "---------[sendAck End]---------" << std::endl;
 }
 
 // 计算 ICMPv6 校验和
@@ -559,6 +646,7 @@ uint16_t Receiver::calculateICMPv6Checksum(const std::vector<uint8_t>& packet, c
 
 // 更新流表
 uint32_t Receiver::updateFlowTable(const FlowKey& flowKey, uint32_t sequenceNumber, const std::vector<uint8_t>& data) {
+    std::cout << "---------[updateFlowTable]---------" << std::endl;
     std::cout << "[Receiver.cpp] 更新流表，序列号: " << sequenceNumber << ", 数据大小: " << data.size() << " 字节" << std::endl;
     auto& flowState = flows[flowKey];
     flowState->flowTable[sequenceNumber] = {data, true, std::chrono::steady_clock::now()};
@@ -568,10 +656,18 @@ uint32_t Receiver::updateFlowTable(const FlowKey& flowKey, uint32_t sequenceNumb
     while (flowState->flowTable.find(highestContiguousSequence) != flowState->flowTable.end()) {
         highestContiguousSequence += flowState->flowTable[highestContiguousSequence].data.size();
     }
+    // 添加调试输出，检查期望的序列号和最高的连续序列号
+    std::cout << "当前期望的序列号: " << flowState->expectedSequenceNumber << std::endl;
+    std::cout << "流表中最高的连续序列号: " << highestContiguousSequence << std::endl;
 
+     // 打印流表中的所有分片信息
+    for (const auto& fragment : flowState->flowTable) {
+        std::cout << "序列号: " << fragment.first << ", 数据大小: " << fragment.second.data.size() << " 字节" << std::endl;
+    }
     // 更新期望的序列号
     flowState->expectedSequenceNumber = highestContiguousSequence;
 
+    std::cout << "---------[updateFlowTable End]---------" << std::endl;
     return highestContiguousSequence - 1;  // 返回最高连续序列号作为 ACK
 }
 
@@ -660,7 +756,7 @@ std::vector<uint8_t> Receiver::deliverData(const FlowKey& flowKey, const std::ve
     }
     std::cout << std::dec << std::endl;
 
-    // 将接收到的数据存储到 receivedData 中
+    // 将接收到的数据添加到 receivedData
     {
         std::lock_guard<std::mutex> lock(receivedDataMutex);
         receivedData.push_back(result);
@@ -674,7 +770,7 @@ std::vector<uint8_t> Receiver::deliverData(const FlowKey& flowKey, const std::ve
         uint8_t moreFragments = fragHeader->ip6f_offlg & IP6F_MORE_FRAG;
         isLastFragment = (moreFragments == 0 && fragmentOffset != 0);
     } else {
-        isLastFragment = true;  // 如果没有分片头部，就认为是完整的包
+        isLastFragment = true;  // 如果没有分片头部，就认为是整的包
     }
 
     std::cout << "[Receiver.cpp] deliverData: 是否为最后一个分片: " << (isLastFragment ? "是" : "否") << std::endl;
@@ -683,7 +779,7 @@ std::vector<uint8_t> Receiver::deliverData(const FlowKey& flowKey, const std::ve
         removeFlowFromQueue(flowKey);
     }
 
-    std::cout << "[Receiver.cpp] deliverData: 处理成" << std::endl;
+    std::cout << "[Receiver.cpp] deliverData: 处理成功" << std::endl;
     return result;
 }
 
@@ -719,6 +815,7 @@ void Receiver::stop() {
 
 // 清理超时的数据流
 void Receiver::cleanupTimedOutFlows() {
+    std::cout << "---------[cleanupTimedOutFlows]---------" << std::endl;
     std::cout << "[Receiver.cpp] 开始清理超时数据流" << std::endl;
     std::lock_guard<std::mutex> lock(flowListMutex);
     auto now = std::chrono::steady_clock::now();
@@ -736,6 +833,7 @@ void Receiver::cleanupTimedOutFlows() {
             break;
         }
     }
+    std::cout << "---------[cleanupTimedOutFlows End]---------" << std::endl;
 }
 
 // 添加 addFlowToQueue 方法的实现
@@ -789,7 +887,7 @@ Receiver 工作程：
 
 1. 初始化
    - 构造函数被调用，初始化参数（窗口大小、MTU、网络接口等）
-   - 创建 libpcap 句柄，准备捕获数据包
+   - 创建 libpcap 句柄，准备捕获数包
    - 初始工作线程相关的数据结构（队列、互斥锁、条件变量）
 
 2. 启动接收过程 (startReceiving)
@@ -799,7 +897,7 @@ Receiver 工作程：
 3. 数据包捕获 (packetHandler)
    - libpcap 捕获到数据包时调用 packetHandler
    - 提取流标识（FlowKey），计算哈希值
-   - 将数据包放入相应的工作队列
+   - 将据包放入相应的工作队列
 
 4. 工作线程处理 (workerThread)
    - 工作线程不断从队列中获取数据包
@@ -836,7 +934,7 @@ Receiver 工作程：
     - 提取目的选项报头内容或负载内容
     - 返回提取的内容
 
-11. 更新流表 (updateFlowTable)
+11. 更流表 (updateFlowTable)
     - 将接收到的数据包信息添加到流表中
     - 调用 checkAndDeliverData 检查是否可以传递数据
 

@@ -9,6 +9,10 @@
 #include <mutex>
 #include <future>
 #include <functional>
+#include <fstream>
+#include <sstream>
+#include <cerrno>
+#include <cstring>
 
 using namespace std;
 
@@ -66,6 +70,18 @@ void receiverThread(Receiver& receiver) {
     }
 }
 
+// 读取文件内容
+string readFileContent(const string& filename) {
+    ifstream file(filename);
+    if (!file) {
+        cerr << "无法打开文件: " << filename << endl;
+        cerr << "错误原因: " << strerror(errno) << endl;
+        return "";
+    }
+    stringstream buffer;
+    buffer << file.rdbuf();
+    return buffer.str();
+}
 
 int main() {
     try {
@@ -86,19 +102,26 @@ int main() {
         Sender sender(windowSize, mtu, interface);
         Receiver receiver(windowSize, mtu, interface, threadCount);
 
-        // 创建目的选项报头内容
+        // 创建第一种数据包：只有目的选项报头内容
         string domain = "www.baidu.com";
-        vector<uint8_t> extensionHeader(domain.begin(), domain.end());
-        cout << "[main] 目的选项报头内容: " << domain << " (Hex: " << stringToHex(domain) << ")" << endl;
+        vector<uint8_t> extensionHeader1(domain.begin(), domain.end());
+        cout << "[main] 第一种数据包 - 目的选项报头内容: " << domain << " (Hex: " << stringToHex(domain) << ")" << endl;
 
-        // 空负载
-        vector<uint8_t> payload;
+        // 创建第二种数据包：目的选项报头内容 + 有效负载
+        string headerContent2 = "123";
+        vector<uint8_t> extensionHeader2(headerContent2.begin(), headerContent2.end());
+        string payloadContent = readFileContent("../playloadtest.txt");
+        vector<uint8_t> payload(payloadContent.begin(), payloadContent.end());
+        cout << "[main] 第二种数据包 - 目的选项报头内容: " << headerContent2 << " (Hex: " << stringToHex(headerContent2) << ")" << endl;
+        cout << "[main] 第二种数据包 - 有效负载大小: " << payload.size() << " 字节" << endl;
 
-        // 添加多个数据包到发送队列，保持负载为空
-        for (int i = 0; i < 5; ++i) {
-            sender.addPacket(srcMAC, srcIPv6, payload, extensionHeader, false);
-            cout << "[main] 添加第 " << i+1 << " 个数据包到发送队列（空负载）" << endl;
-        }
+        // 添加第一种数据包到发送队列（无负载）
+        sender.addPacket(srcMAC, srcIPv6, vector<uint8_t>(), extensionHeader1, false);
+        cout << "[main] 添加第一种数据包到发送队列（无负载）" << endl;
+
+        // 添加第二种数据包到发送队列（有负载）
+        sender.addPacket(srcMAC, srcIPv6, payload, extensionHeader2, false);
+        cout << "[main] 添加第二种数据包到发送队列（有负载）" << endl;
 
         // 创建并启动 Sender 和 Receiver 线程
         thread senderT(senderThread, ref(sender));
