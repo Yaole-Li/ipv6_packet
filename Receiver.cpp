@@ -656,7 +656,14 @@ uint32_t Receiver::updateFlowTable(const FlowKey& flowKey, uint32_t sequenceNumb
     while (flowState->flowTable.find(highestContiguousSequence) != flowState->flowTable.end()) {
         highestContiguousSequence += flowState->flowTable[highestContiguousSequence].data.size();
     }
+    // 添加调试输出，检查期望的序列号和最高的连续序列号
+    std::cout << "当前期望的序列号: " << flowState->expectedSequenceNumber << std::endl;
+    std::cout << "流表中最高的连续序列号: " << highestContiguousSequence << std::endl;
 
+     // 打印流表中的所有分片信息
+    for (const auto& fragment : flowState->flowTable) {
+        std::cout << "序列号: " << fragment.first << ", 数据大小: " << fragment.second.data.size() << " 字节" << std::endl;
+    }
     // 更新期望的序列号
     flowState->expectedSequenceNumber = highestContiguousSequence;
 
