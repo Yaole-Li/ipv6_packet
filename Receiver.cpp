@@ -144,7 +144,7 @@ void Receiver::packetHandler(u_char* userData, const struct pcap_pkthdr* pkthdr,
     }
 
     if (!hasDstOpt) {
-        // std::cout << "数据包不包含目的选项头部，略" << std::endl;
+        // std::cout << "数据包不包含目的选项头部，" << std::endl;
         flag = false;
         return;
     }
@@ -268,7 +268,7 @@ FlowKey Receiver::extractFlowKey(const std::vector<uint8_t>& packetData) {
 // 检查 IPv6 头部是否完整
 bool Receiver::checkIPv6Header(const uint8_t* packet, int packetSize) {
     std::cout << "---------[checkIPv6Header]---------" << std::endl;
-    (void)packet;  // 避免未使用参数的警告
+    (void)packet;  // 避免未使用数的警告
     if (static_cast<size_t>(packetSize) < sizeof(struct ip6_hdr)) {
         return false;
     }
@@ -376,7 +376,7 @@ uint32_t Receiver::reassembleExtensionHeader(const FlowKey& flowKey, const uint8
             case IPPROTO_FRAGMENT:
                 // 处理分片头部
                 ackNumber = handleFragment(flowKey, packet + headerLen, packetSize - headerLen);
-                return ackNumber;  // 分片头部之后就负载或者下一个扩展头，在这里结束处理
+                return ackNumber;  // 分片头部之后就负载或者下一个扩展头，在这里结束处
             default:
                 // 未知的头部类型或者已经到达负载部分，停止处理
                 return ackNumber;
@@ -397,41 +397,43 @@ uint32_t Receiver::reassemblePayload(const FlowKey& flowKey, const uint8_t* pack
     std::cout << "[Receiver.cpp] IPv6 负载长度 (payloadLen): " << payloadLen << " 字节" << std::endl;
 
     // 计算扩展头部的大小和找到分片头部（如果存在）
-    size_t extensionHeaderSize = 0;
+    size_t HeaderSize = 0;
     uint8_t nextHeader = ip6Header->ip6_nxt;
     const uint8_t* currentHeader = packet + sizeof(struct ip6_hdr);
     uint16_t fragmentOffset = 0;
     bool isFragment = false;
+    bool moreFragments = false;
 
     while (nextHeader == IPPROTO_FRAGMENT || nextHeader == IPPROTO_DSTOPTS) {
         if (nextHeader == IPPROTO_FRAGMENT) {
             struct ip6_frag* fragHeader = (struct ip6_frag*)currentHeader;
-            extensionHeaderSize += sizeof(struct ip6_frag);
-            fragmentOffset = ntohs(fragHeader->ip6f_offlg & IP6F_OFF_MASK) / 8; // 偏移量以8字节为单位
+            HeaderSize += sizeof(struct ip6_frag);
+            fragmentOffset = ntohs(fragHeader->ip6f_offlg & IP6F_OFF_MASK);
+            moreFragments = (fragHeader->ip6f_offlg & IP6F_MORE_FRAG) != 0;
             isFragment = true;
             nextHeader = fragHeader->ip6f_nxt;
             currentHeader += sizeof(struct ip6_frag);
         } else if (nextHeader == IPPROTO_DSTOPTS) {
             struct ip6_dest* dstopt = (struct ip6_dest*)currentHeader;
-            size_t optLen = (dstopt->ip6d_len + 1) * 8 + 2; // Next Header 和 Header Extension Length 长度
-            extensionHeaderSize += optLen;
+            size_t optLen = (dstopt->ip6d_len + 1) * 8 + 2; //这里以后都不要改了
+            HeaderSize += optLen;
             nextHeader = dstopt->ip6d_nxt;
             currentHeader += optLen;
         }
     }
 
-    std::cout << "[Receiver.cpp] 扩展头部大小: " << extensionHeaderSize << " 字节" << std::endl;
+    std::cout << "[Receiver.cpp] 分片头部与扩展头部大小: " << HeaderSize << " 字节" << std::endl;
 
     // 计算实际有效载荷的大小和位置
-    size_t actualPayloadSize = payloadLen - extensionHeaderSize;
-    const uint8_t* payloadStart = packet + sizeof(struct ip6_hdr) + extensionHeaderSize;
+    size_t actualPayloadSize = payloadLen - HeaderSize;
+    const uint8_t* payloadStart = packet + sizeof(struct ip6_hdr) + HeaderSize;
 
     std::cout << "[Receiver.cpp] 实际有效载荷大小: " << actualPayloadSize << " 字节" << std::endl;
 
     if (isFragment) {
-        fragmentOffset *= 8;  // 转换为字节偏移
         std::cout << "[Receiver.cpp] 分片偏移: " << fragmentOffset << " 字节" << std::endl;
         std::cout << "[Receiver.cpp] 分片偏移: " << fragmentOffset / 8 << " 八字节" << std::endl;
+        std::cout << "[Receiver.cpp] 更多分片: " << (moreFragments ? "是" : "否") << std::endl;
     } else {
         std::cout << "[Receiver.cpp] 不是分片数据包" << std::endl;
     }
@@ -440,20 +442,26 @@ uint32_t Receiver::reassemblePayload(const FlowKey& flowKey, const uint8_t* pack
     std::vector<uint8_t> payload(payloadStart, payloadStart + actualPayloadSize);
 
     // 更新流表
+    std::lock_guard<std::mutex> lock(flowsMutex);
     auto& flowState = flows[flowKey];
-    flowState->addFragment(fragmentOffset, payload);
+    flowState->addFragment(fragmentOffset, payload, moreFragments);
+
+    std::cout << "[Receiver.cpp] 更新流表后的状态:" << std::endl;
+    std::cout << "  当前分片数: " << flowState->flowTable.size() << std::endl;
+    std::cout << "  当前总大小: " << flowState->totalSize << std::endl;
 
     // 检查是否可以重组数据包
     if (flowState->isComplete()) {
         std::vector<uint8_t> reassembledPayload = flowState->reassemble();
         std::cout << "[Receiver.cpp] 数据包已完全重组，大小: " << reassembledPayload.size() << " 字节" << std::endl;
         // 这里可以处理重组后的数据包，例如解码、转发等
+        flows.erase(flowKey);  // 重组完成后清理流表
+        return reassembledPayload.size();  // 返回重组后的数据包大小作为确认号
+    } else {
+        std::cout << "[Receiver.cpp] 数据包尚未完全重组，当前接收到的分片数: " << flowState->getFragmentCount() << std::endl;
+        // 返回最高连续序列号作为 ACK 号
+        return flowState->getHighestContiguousSequence();
     }
-
-    std::cout << "---------[reassemblePayload End]---------" << std::endl;
-
-    // 返回最高连续序列号作为 ACK 号
-    return flowState->getHighestContiguousSequence();
 }
 
 
@@ -685,7 +693,7 @@ uint32_t Receiver::updateFlowTable(const FlowKey& flowKey, uint32_t sequenceNumb
     while (flowState->flowTable.find(highestContiguousSequence) != flowState->flowTable.end()) {
         highestContiguousSequence += flowState->flowTable[highestContiguousSequence].data.size();
     }
-    // 添加调试输出，检查期望的序列号和最高的连续序列号
+    // 添加调输出，检查期望的序列号和最高的连续序列号
     std::cout << "当前期望的序列号: " << flowState->expectedSequenceNumber << std::endl;
     std::cout << "流表中最高的连续序列号: " << highestContiguousSequence << std::endl;
 

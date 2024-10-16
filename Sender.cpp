@@ -86,7 +86,7 @@ bool Sender::sendPacket() {
     std::cout << "[Sender.cpp] 尝试发送数据包，当前序列号: " << nextSequenceNumber << std::endl;
     if (nextSequenceNumber < base + windowSize && !packetQueue.empty()) {
         auto& packet = packetQueue.front();
-        // 对数据包进行分片
+        // 对据包进行分片
         std::vector<std::vector<uint8_t>> fragments = fragmentPacket(*packet);
         bool allSent = true;
         // 发送所有分片
@@ -200,7 +200,7 @@ std::vector<std::vector<uint8_t>> Sender::fragmentPacket(const IPv6Packet& packe
     const std::vector<uint8_t>& payload = packet.getPayload();
     
     std::cout << "[Sender.cpp] 扩展头部大小: " << extensionHeader.size() << " 字节" << std::endl;
-    std::cout << "[Sender.cpp] 负载大小: " << payload.size() << " 字节" << std::endl;
+    std::cout << "[Sender.cpp] 有效负载大小: " << payload.size() << " 字节" << std::endl;
 
     // 定义各种头部和尾部的大小
     size_t ethernetHeaderSize = 14;  // 以太网帧头大小
@@ -255,13 +255,20 @@ std::vector<std::vector<uint8_t>> Sender::fragmentPacket(const IPv6Packet& packe
         if (!extensionHeader.empty()) {
             destinationOptionsHeaderSize += ((extensionHeader.size() + 7) / 8) * 8; // 向上取整到8的倍数
         }
-        
+
+        std::cout << "[Sender.cpp] 目的选项报头的总大小: " << destinationOptionsHeaderSize << " 字节" << std::endl;
         size_t maxPayloadPerFragment = maxFragmentPayloadSize - destinationOptionsHeaderSize;
         
         if (payload.size() > maxPayloadPerFragment) {
-            // 需要有效负载进行分片
-            for (size_t offset = 0; offset < payload.size(); offset += maxPayloadPerFragment) {
+            // 需要对有效负载进行分片
+            for (size_t offset = 0; offset < payload.size();) {
                 size_t fragmentSize = std::min(maxPayloadPerFragment, payload.size() - offset);
+                // 确保 fragmentSize 是 8 的倍数，除非是最后一个分片
+                if (offset + fragmentSize < payload.size()) {
+                    fragmentSize = (fragmentSize / 8) * 8;
+                }
+                std::cout << "[Sender.cpp] 当前分片大小: " << fragmentSize << " 字节" << std::endl;
+                
                 std::vector<uint8_t> fragmentPayload(payload.begin() + offset, payload.begin() + offset + fragmentSize);
                 
                 bool moreFragments = (offset + fragmentSize < payload.size());
@@ -275,9 +282,12 @@ std::vector<std::vector<uint8_t>> Sender::fragmentPacket(const IPv6Packet& packe
                                           identification);
                 fragmentPacket.constructPacket();
                 fragments.push_back(fragmentPacket.getPacket());
+
+                offset += fragmentSize;  // 使用实际的 fragmentSize 来增加 offset
             }
         } else {
             // 有效负载不需要分片
+            std::cout << "[Sender.cpp] 负载无需分片，大小: " << payload.size() << " 字节" << std::endl;
             IPv6Packet fragmentPacket(packet.getDestMAC(), packet.getDestIPv6(), 
                                       payload, extensionHeader, false, 
                                       0, false, identification);
@@ -464,7 +474,7 @@ Sender 类流图：
           |
           v
 +-------------------+
-|  添加以���网帧     |
+|  添加以太网帧     |
 |(addEthernetFrame) |
 +-------------------+
           |

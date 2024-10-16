@@ -14,6 +14,7 @@
 #include <queue>
 #include <atomic>
 #include <unordered_map>
+#include <iostream> 
 
 // 流标识结构体，用于唯一标识一个数据流
 struct FlowKey {
@@ -66,7 +67,7 @@ public:
     // threadCount: 工作线程数量
     Receiver(int windowSize, size_t mtu, const std::string& interface, int threadCount);
 
-    // 析构函数：清理资源
+    // 析构函数：清资源
     ~Receiver();
 
     // 开始接收数据包的主循环
@@ -87,6 +88,7 @@ private:
         std::vector<uint8_t> data;  // 数据包内容
         bool received;              // 是否已接收
         std::chrono::steady_clock::time_point receiveTime;  // 接收时
+        bool moreFragments;  // 是否为更多分片
     };
 
     // 流状态结构体，用于管理每个数据流的状态
@@ -94,57 +96,84 @@ private:
         uint32_t expectedSequenceNumber;  // 期望接收的下一个序列号
         std::map<uint32_t, PacketStatus> flowTable;  // 该流的数据包状态表
         std::mutex flowMutex;  // 用于保护该流状态的互斥锁
+        uint32_t totalSize;    // 总的有效载荷大小
+
+        FlowState() : expectedSequenceNumber(0), totalSize(0) {} // 构造函数
 
         // 检查流表是否包含所有的连续分片
-    bool isComplete() const {
-        uint32_t currentSeq = expectedSequenceNumber;
-        for (const auto& fragment : flowTable) {
-            if (fragment.first != currentSeq) {
-                return false;  // 如果分片不是按顺序的，表示未完整
+        // 遍历流表中的所有分片，检查它们是否连续且完整
+        // 如果所有分片都连续且接收完整，则返回true，否则返回false
+        // 同时计算已接收的总数据大小，并与预期的总大小进行比较
+        bool isComplete() const {
+            std::cout << "[FlowState::isComplete] 开始检查完整性" << std::endl;
+            std::cout << "[FlowState::isComplete] 流表大小: " << flowTable.size() << std::endl;
+            std::cout << "[FlowState::isComplete] 总大小: " << totalSize << std::endl;
+
+            if (flowTable.empty()) {
+                std::cout << "[FlowState::isComplete] 流表为空，返回 false" << std::endl;
+                return false;
             }
-            currentSeq += fragment.second.data.size();
-        }
-        return true;
-    }
 
-    // 添加分片数据到流表中
-    void addFragment(uint32_t sequenceNumber, const std::vector<uint8_t>& data) {
-        flowTable[sequenceNumber] = {data, true, std::chrono::steady_clock::now()};
-    }
+            uint32_t expectedOffset = 0;
+            for (const auto& fragment : flowTable) {
+                std::cout << "[FlowState::isComplete] 检查分片 - 偏移: " << fragment.first 
+                          << ", 大小: " << fragment.second.data.size() << std::endl;
 
-    // 重组已收到的分片数据
-    std::vector<uint8_t> reassemble() {
-        std::vector<uint8_t> reassembledData;
-        uint32_t currentSeq = expectedSequenceNumber;
-
-        // 确保按顺序重组
-        for (auto it = flowTable.begin(); it != flowTable.end();) {
-            if (it->first == currentSeq) {
-                reassembledData.insert(reassembledData.end(), it->second.data.begin(), it->second.data.end());
-                currentSeq += it->second.data.size();
-                it = flowTable.erase(it);  // 删除已重组的分片
-            } else {
-                ++it;
+                if (fragment.first != expectedOffset) {
+                    std::cout << "[FlowState::isComplete] 分片不连续，期望偏移: " << expectedOffset 
+                              << ", 实际偏移: " << fragment.first << ", 返回 false" << std::endl;
+                    return false;
+                }
+                expectedOffset = fragment.first + fragment.second.data.size();
             }
+
+            bool isComplete = !flowTable.rbegin()->second.moreFragments;
+            std::cout << "[FlowState::isComplete] 最后一个分片的更多分片标志: " 
+                      << (flowTable.rbegin()->second.moreFragments ? "是" : "否") 
+                      << ", 完整性: " << (isComplete ? "是" : "否") << std::endl;
+
+            return isComplete;
         }
 
-        // 更新预期的序列号
-        expectedSequenceNumber = currentSeq;
-        return reassembledData;
-    }
-
-    // 返回最高的连续序列号，作为 ACK 确认号
-    uint32_t getHighestContiguousSequence() const {
-        uint32_t highestContiguousSequence = expectedSequenceNumber;
-        for (const auto& fragment : flowTable) {
-            if (fragment.first == highestContiguousSequence) {
-                highestContiguousSequence += fragment.second.data.size();
-            } else {
-                break;
+        // 添加分片数据到流表中
+        void addFragment(uint32_t offset, const std::vector<uint8_t>& data, bool moreFragments) {
+            flowTable[offset] = {data, true, std::chrono::steady_clock::now(), moreFragments};
+            if (offset + data.size() > totalSize) {
+                totalSize = offset + data.size();
             }
+            std::cout << "[FlowState::addFragment] 添加分片，偏移: " << offset 
+                      << ", 大小: " << data.size() 
+                      << ", 更多分片: " << (moreFragments ? "是" : "否") 
+                      << ", 当前总大小: " << totalSize << std::endl;
         }
-        return highestContiguousSequence;
-    }
+
+        // 重组已收到的分片数据
+        std::vector<uint8_t> reassemble() {
+            std::vector<uint8_t> reassembledData;
+            reassembledData.reserve(totalSize);
+            for (const auto& fragment : flowTable) {
+                reassembledData.insert(reassembledData.end(), fragment.second.data.begin(), fragment.second.data.end());
+            }
+            return reassembledData;
+        }
+
+        // 返回最高的连续序列号，作为 ACK 确认号
+        uint32_t getHighestContiguousSequence() const {
+            uint32_t highestContiguousSequence = 0;
+            for (const auto& fragment : flowTable) {
+                if (fragment.first == highestContiguousSequence) {
+                    highestContiguousSequence += fragment.second.data.size();
+                } else {
+                    break;
+                }
+            }
+            return highestContiguousSequence;
+        }
+
+        // 获取当前接收到的分片数
+        size_t getFragmentCount() const {
+            return flowTable.size();
+        }
     };
 
     int windowSize;  // 滑动窗口大小
