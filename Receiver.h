@@ -94,6 +94,57 @@ private:
         uint32_t expectedSequenceNumber;  // 期望接收的下一个序列号
         std::map<uint32_t, PacketStatus> flowTable;  // 该流的数据包状态表
         std::mutex flowMutex;  // 用于保护该流状态的互斥锁
+
+        // 检查流表是否包含所有的连续分片
+    bool isComplete() const {
+        uint32_t currentSeq = expectedSequenceNumber;
+        for (const auto& fragment : flowTable) {
+            if (fragment.first != currentSeq) {
+                return false;  // 如果分片不是按顺序的，表示未完整
+            }
+            currentSeq += fragment.second.data.size();
+        }
+        return true;
+    }
+
+    // 添加分片数据到流表中
+    void addFragment(uint32_t sequenceNumber, const std::vector<uint8_t>& data) {
+        flowTable[sequenceNumber] = {data, true, std::chrono::steady_clock::now()};
+    }
+
+    // 重组已收到的分片数据
+    std::vector<uint8_t> reassemble() {
+        std::vector<uint8_t> reassembledData;
+        uint32_t currentSeq = expectedSequenceNumber;
+
+        // 确保按顺序重组
+        for (auto it = flowTable.begin(); it != flowTable.end();) {
+            if (it->first == currentSeq) {
+                reassembledData.insert(reassembledData.end(), it->second.data.begin(), it->second.data.end());
+                currentSeq += it->second.data.size();
+                it = flowTable.erase(it);  // 删除已重组的分片
+            } else {
+                ++it;
+            }
+        }
+
+        // 更新预期的序列号
+        expectedSequenceNumber = currentSeq;
+        return reassembledData;
+    }
+
+    // 返回最高的连续序列号，作为 ACK 确认号
+    uint32_t getHighestContiguousSequence() const {
+        uint32_t highestContiguousSequence = expectedSequenceNumber;
+        for (const auto& fragment : flowTable) {
+            if (fragment.first == highestContiguousSequence) {
+                highestContiguousSequence += fragment.second.data.size();
+            } else {
+                break;
+            }
+        }
+        return highestContiguousSequence;
+    }
     };
 
     int windowSize;  // 滑动窗口大小

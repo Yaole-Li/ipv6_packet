@@ -407,13 +407,13 @@ uint32_t Receiver::reassemblePayload(const FlowKey& flowKey, const uint8_t* pack
         if (nextHeader == IPPROTO_FRAGMENT) {
             struct ip6_frag* fragHeader = (struct ip6_frag*)currentHeader;
             extensionHeaderSize += sizeof(struct ip6_frag);
-            fragmentOffset = ntohs(fragHeader->ip6f_offlg & IP6F_OFF_MASK) / 8; //这里除以八才是偏移量，因为偏移量以8字节为单位
+            fragmentOffset = ntohs(fragHeader->ip6f_offlg & IP6F_OFF_MASK) / 8; // 偏移量以8字节为单位
             isFragment = true;
             nextHeader = fragHeader->ip6f_nxt;
             currentHeader += sizeof(struct ip6_frag);
         } else if (nextHeader == IPPROTO_DSTOPTS) {
             struct ip6_dest* dstopt = (struct ip6_dest*)currentHeader;
-            size_t optLen = (dstopt->ip6d_len + 1) * 8 + 2; //2是Next Header和Header Extension Length长度
+            size_t optLen = (dstopt->ip6d_len + 1) * 8 + 2; // Next Header 和 Header Extension Length 长度
             extensionHeaderSize += optLen;
             nextHeader = dstopt->ip6d_nxt;
             currentHeader += optLen;
@@ -429,10 +429,9 @@ uint32_t Receiver::reassemblePayload(const FlowKey& flowKey, const uint8_t* pack
     std::cout << "[Receiver.cpp] 实际有效载荷大小: " << actualPayloadSize << " 字节" << std::endl;
 
     if (isFragment) {
-        // 如果是分片，fragmentOffset 已经在上面的循环中设置
         fragmentOffset *= 8;  // 转换为字节偏移
         std::cout << "[Receiver.cpp] 分片偏移: " << fragmentOffset << " 字节" << std::endl;
-        std::cout << "[Receiver.cpp] 分片偏移: " << fragmentOffset/8 << " 八字节" << std::endl;
+        std::cout << "[Receiver.cpp] 分片偏移: " << fragmentOffset / 8 << " 八字节" << std::endl;
     } else {
         std::cout << "[Receiver.cpp] 不是分片数据包" << std::endl;
     }
@@ -440,9 +439,23 @@ uint32_t Receiver::reassemblePayload(const FlowKey& flowKey, const uint8_t* pack
     // 创建有效载荷的副本
     std::vector<uint8_t> payload(payloadStart, payloadStart + actualPayloadSize);
 
-    // 更新流表并返回 ACK 号
-    return updateFlowTable(flowKey, fragmentOffset, payload);
+    // 更新流表
+    auto& flowState = flows[flowKey];
+    flowState->addFragment(fragmentOffset, payload);
+
+    // 检查是否可以重组数据包
+    if (flowState->isComplete()) {
+        std::vector<uint8_t> reassembledPayload = flowState->reassemble();
+        std::cout << "[Receiver.cpp] 数据包已完全重组，大小: " << reassembledPayload.size() << " 字节" << std::endl;
+        // 这里可以处理重组后的数据包，例如解码、转发等
+    }
+
+    std::cout << "---------[reassemblePayload End]---------" << std::endl;
+
+    // 返回最高连续序列号作为 ACK 号
+    return flowState->getHighestContiguousSequence();
 }
+
 
 // 更新 handleFragment 方法
 uint32_t Receiver::handleFragment(const FlowKey& flowKey, const uint8_t* fragmentHeader, int remainingSize) {
